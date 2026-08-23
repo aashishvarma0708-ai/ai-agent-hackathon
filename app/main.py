@@ -6,6 +6,7 @@ import time
 
 from app.browser_phone import router as browser_phone_router
 from dotenv import load_dotenv
+from app.civicresolve_client import CivicResolveClient, CivicResolveError
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
@@ -447,17 +448,135 @@ async def media_stream(websocket: WebSocket):
                 else False
             )
 
-            print(f"🤖 CIVICRESOLVE: {reply}")
-            print(f"⏱️ Agent latency: {groq_ms:.0f} ms")
+            # =================================================
+            # REAL CIVICRESOLVE SUBMISSION
+            # =================================================
 
             if ready_to_submit:
                 print(
                     "🚦 Python submission gate OPEN — "
-                    "caller explicitly confirmed"
+                    "caller explicitly confirmed",
+                    flush=True,
                 )
-                # CivicResolve API submission is deliberately
-                # added in the next checkpoint. The LLM itself
-                # never performs the submission.
+
+                try:
+                    civicresolve = CivicResolveClient()
+
+                    backend_start = time.perf_counter()
+
+                    backend_result = (
+                        await civicresolve.submit_complaint(
+                            state
+                        )
+                    )
+
+                    backend_ms = (
+                        time.perf_counter()
+                        - backend_start
+                    ) * 1000
+
+                    complaint_id = (
+                        state.complaint_id
+                        or backend_result.get(
+                            "complaint_id"
+                        )
+                    )
+
+                    if not complaint_id:
+                        raise CivicResolveError(
+                            "Submission succeeded but "
+                            "no complaint ID was returned."
+                        )
+
+                    # Complaint now genuinely exists.
+                    state.submitted = True
+                    state.complaint_id = str(
+                        complaint_id
+                    )
+
+                    # Evidence collection happens only
+                    # after successful registration.
+                    state.awaiting_evidence_permission = True
+
+                    reply = (
+                        "Done. Your complaint has been "
+                        "registered successfully. "
+                        f"Your complaint ID is "
+                        f"{state.complaint_id}. "
+                        "Would you like me to send you a "
+                        "secure link so you can add a photo "
+                        "and your current location?"
+                    )
+
+                    print(
+                        "✅ REAL CIVICRESOLVE "
+                        "SUBMISSION COMPLETE",
+                        flush=True,
+                    )
+
+                    print(
+                        "🎫 REAL COMPLAINT ID:",
+                        state.complaint_id,
+                        flush=True,
+                    )
+
+                    print(
+                        f"🏛️ CivicResolve latency: "
+                        f"{backend_ms:.0f} ms",
+                        flush=True,
+                    )
+
+                except CivicResolveError as exc:
+                    print(
+                        "❌ CIVICRESOLVE SUBMISSION FAILED:",
+                        str(exc),
+                        flush=True,
+                    )
+
+                    # Never falsely tell the citizen that
+                    # the complaint was registered.
+                    state.submitted = False
+                    state.complaint_id = None
+
+                    # Let caller explicitly retry.
+                    state.confirmed = False
+                    state.awaiting_confirmation = True
+                    state.awaiting_evidence_permission = False
+                    state.evidence_opt_in = None
+
+                    reply = (
+                        "I'm having trouble registering "
+                        "your complaint right now. "
+                        "It has not been submitted. "
+                        "Would you like me to try again?"
+                    )
+
+                except Exception as exc:
+                    print(
+                        "❌ UNEXPECTED SUBMISSION ERROR:",
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+
+                    state.submitted = False
+                    state.complaint_id = None
+                    state.confirmed = False
+                    state.awaiting_confirmation = True
+                    state.awaiting_evidence_permission = False
+                    state.evidence_opt_in = None
+
+                    reply = (
+                        "I'm having trouble registering "
+                        "your complaint right now. "
+                        "It has not been submitted. "
+                        "Would you like me to try again?"
+                    )
+
+            print(f"🤖 CIVICRESOLVE: {reply}")
+            print(
+                f"⏱️ Agent latency: "
+                f"{groq_ms:.0f} ms"
+            )
 
             await speak_text(
                 reply,
@@ -465,7 +584,8 @@ async def media_stream(websocket: WebSocket):
             )
 
             total_ms = (
-                time.perf_counter() - total_start
+                time.perf_counter()
+                - total_start
             ) * 1000
 
             print(
@@ -475,6 +595,7 @@ async def media_stream(websocket: WebSocket):
 
         except asyncio.CancelledError:
             raise
+
         except Exception as exc:
             print(
                 f"❌ Agent reply pipeline error: "
