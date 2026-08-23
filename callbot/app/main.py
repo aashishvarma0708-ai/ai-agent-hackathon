@@ -120,7 +120,11 @@ async def voice(
     twiml = f"""
 <Response>
     <Connect>
-        <Stream url="{websocket_url}">
+        <Stream
+            url="{websocket_url}"
+            statusCallback="https://{public_host}/stream-status"
+            statusCallbackMethod="POST"
+        >
             <Parameter
                 name="caller_number"
                 value="{caller_number}"
@@ -268,6 +272,62 @@ async def send_twilio_clear(
 # ============================================================
 # TWILIO MEDIA STREAM
 # ============================================================
+
+
+
+# ============================================================
+# TWILIO MEDIA STREAM STATUS CALLBACK
+# ============================================================
+
+@app.post("/stream-status")
+async def stream_status(request: Request):
+    """
+    Receives lifecycle/error information directly from Twilio
+    for the bidirectional Media Stream.
+    """
+    try:
+        form = await request.form()
+
+        stream_event = str(
+            form.get("StreamEvent") or ""
+        ).strip()
+
+        stream_error = str(
+            form.get("StreamError") or ""
+        ).strip()
+
+        stream_sid = str(
+            form.get("StreamSid") or ""
+        ).strip()
+
+        call_sid = str(
+            form.get("CallSid") or ""
+        ).strip()
+
+        print()
+        print("=====================================")
+        print("📡 TWILIO STREAM STATUS")
+        print("=====================================")
+        print(f"Event: {stream_event}")
+        print(f"Stream SID: {stream_sid}")
+        print(f"Call SID: {call_sid}")
+
+        if stream_error:
+            print(f"❌ StreamError: {stream_error}")
+        else:
+            print("✅ No StreamError reported")
+
+        print("=====================================")
+        print()
+
+    except Exception as exc:
+        print(
+            f"⚠️ Stream status callback error: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+    return Response(status_code=204)
 
 
 @app.websocket("/media-stream")
@@ -1116,14 +1176,14 @@ async def media_stream(websocket: WebSocket):
                 continue
 
             if event == "stop":
-                print("🛑 Twilio stream stopped")
+                print("🛑 Twilio stream stopped", flush=True)
                 break
 
             if event:
                 print(f"ℹ️ Twilio event: {event}")
 
     except WebSocketDisconnect:
-        print("📞 Twilio WebSocket disconnected")
+        print("📞 Twilio WebSocket disconnected", flush=True)
 
     except Exception as exc:
         print(
