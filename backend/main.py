@@ -90,6 +90,8 @@ class SimulateTimeRequest(BaseModel):
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
+ADMIN_EMAIL_2 = os.getenv("ADMIN_EMAIL_2", "").strip()
+ADMIN_PASSWORD_2 = os.getenv("ADMIN_PASSWORD_2", "").strip()
 
 
 class AdminLoginRequest(BaseModel):
@@ -103,28 +105,43 @@ def admin_login(payload: AdminLoginRequest):
     Authenticate CivicResolve Authority Command Center users.
     """
 
-    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+    admin_credentials = []
+
+    if ADMIN_EMAIL and ADMIN_PASSWORD:
+        admin_credentials.append((ADMIN_EMAIL, ADMIN_PASSWORD))
+
+    if ADMIN_EMAIL_2 and ADMIN_PASSWORD_2:
+        admin_credentials.append((ADMIN_EMAIL_2, ADMIN_PASSWORD_2))
+
+    if not admin_credentials:
         raise HTTPException(
             status_code=503,
             detail="Authority authentication is not configured."
         )
 
-    email_valid = secrets.compare_digest(
-        payload.email.strip().lower(),
-        ADMIN_EMAIL.lower()
-    )
+    submitted_email = payload.email.strip().lower()
+    submitted_password = payload.password
 
-    password_valid = secrets.compare_digest(
-        payload.password,
-        ADMIN_PASSWORD
-    )
+    matched_email = None
+    for configured_email, configured_password in admin_credentials:
+        email_valid = secrets.compare_digest(
+            submitted_email,
+            configured_email.lower()
+        )
+        password_valid = secrets.compare_digest(
+            submitted_password,
+            configured_password
+        )
+        if email_valid and password_valid:
+            matched_email = configured_email
+            break
 
-    if email_valid and password_valid:
+    if matched_email is not None:
         return {
             "authenticated": True,
             "token": "cr_auth_" + secrets.token_hex(16),
             "user": {
-                "email": ADMIN_EMAIL,
+                "email": matched_email,
                 "name": "Municipal Chief Commissioner",
                 "role": "MUNICIPAL_ADMIN"
             }
