@@ -1,0 +1,34 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+civicresolve.db
+.DS_Store
+
+frontend/node_modules/
+frontend/dist/
+.pytest_cache/
+
+.admin_login.txt
+
+# ==============================
+# CivicResolve private files
+# ==============================
+callbot/.env
+frontend/.env
+
+# Python
+callbot/.venv/
+
+# Frontend
+
+# macOS
+
+# Runtime / generated files
+callbot/runtime/
+*.log
+
+# Development backups
+*_before_*
+*backup*.db
+*.bak
