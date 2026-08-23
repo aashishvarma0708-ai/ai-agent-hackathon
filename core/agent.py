@@ -214,6 +214,10 @@ def analyze_complaint(text: str, image_bytes=None, image_mime="image/jpeg") -> t
         # Groq json_validate_failed before the response reached our parser.
         if not image_bytes:
             request_args["response_format"] = {"type": "json_object"}
+        else:
+            # Qwen 3.6 defaults to reasoning mode. For civic image
+            # classification we want the final structured answer directly.
+            request_args["reasoning_effort"] = "none"
 
         completion = client.chat.completions.create(**request_args)
 
