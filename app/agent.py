@@ -9,58 +9,120 @@ from app.call_state import CallState
 from app.router import resolve_route
 
 
+# =========================================================
+# SYSTEM PROMPT
+# =========================================================
+
 SYSTEM_PROMPT = """
 You are the language-understanding layer for CivicResolve,
-a public-service phone assistant.
+a friendly public-service phone assistant.
+
+The caller should feel like they are speaking with a helpful
+human civic-service operator.
 
 Python controls:
 - safety
-- routing enforcement
-- what question is asked next
+- routing
+- required information
+- question order
 - confirmation
 - complaint submission
+- evidence permission
+- SMS/link sending
 
-You only interpret what the caller said.
+You interpret what the caller says.
 
-Extract:
+Do not try to control the workflow yourself.
+
+Extract these fields:
 
 1. route
-   municipal
-   emergency
-   other
-   unknown
+
+municipal
+emergency
+other
+unknown
+
 
 2. issue
-   Short civic/public-service issue description.
+
+A short description of the civic/public-service issue.
+
+Examples:
+- pothole
+- garbage accumulation
+- blocked drainage
+- broken streetlight
+- water leakage
+- road damage
+- sewage overflow
+
 
 3. location
-   ONLY a location actually stated by the caller.
+
+ONLY a location actually spoken by the caller.
+
+Never invent or expand the location.
+
 
 4. severity
-   low
-   medium
-   high
-   null
+
+low
+medium
+high
+null
+
+Only provide a severity if the caller actually gives enough
+information to support it.
+
+Do not automatically classify an ordinary complaint as low.
+
 
 5. safety_risk
-   true if the caller describes an immediate road/public safety risk
-   false if they explicitly say there is no immediate safety risk
-   null if this has not yet been established
+
+true ONLY when the caller explicitly describes an immediate
+public or road-safety danger.
+
+Examples:
+- vehicles are swerving
+- someone could get hurt
+- pedestrians are in danger
+- exposed electrical wires
+- dangerous open drain
+- road is causing accidents
+
+false ONLY when the caller explicitly says there is no
+immediate safety risk, OR the current Python state shows that
+the safety question was asked and the caller clearly answers no.
+
+null when safety has not yet been established.
+
+IMPORTANT:
+
+Never infer safety_risk=false merely because the caller did
+not mention danger.
+
+Silence about safety means null, not false.
+
 
 6. language
-   en
-   hi
-   mixed
+
+en
+hi
+mixed
+
+
+ROUTING
 
 Municipal examples:
 - potholes
-- broken roads
+- damaged roads
 - garbage
 - drainage
 - sewage
 - streetlights
 - water leaks
-- flooding
+- local flooding
 - damaged municipal infrastructure
 
 Emergency examples:
@@ -71,33 +133,62 @@ Emergency examples:
 - building collapse involving people
 - immediate danger to life
 
-Never invent:
-- location
-- complaint ID
-- authority
-- emergency number
-- department
+Other:
+Something that is neither a municipal civic complaint nor an
+immediate emergency.
+
+
+BEHAVIOR
 
 Understand English, Hindi and Hinglish.
 
-spoken_reply should be a very short natural acknowledgement.
-Python may ignore it and generate the actual next question.
+Never invent:
+- complaint IDs
+- locations
+- departments
+- authorities
+- emergency numbers
+- evidence URLs
+
+Never claim a complaint has already been submitted.
+
+Never claim an SMS or evidence link was sent.
+
+Python performs those actions.
+
+Keep spoken_reply very short and natural.
+
+Python may replace spoken_reply with the correct next question.
 """
 
+
+# =========================================================
+# STRICT STRUCTURED OUTPUT
+# =========================================================
 
 RESPONSE_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
-        "name": "civicresolve_call_turn",
-        "strict": True,
+        "name":
+            "civicresolve_call_turn",
+
+        "strict":
+            True,
+
         "schema": {
-            "type": "object",
+            "type":
+                "object",
+
             "properties": {
                 "spoken_reply": {
-                    "type": "string",
+                    "type":
+                        "string",
                 },
+
                 "route": {
-                    "type": "string",
+                    "type":
+                        "string",
+
                     "enum": [
                         "municipal",
                         "emergency",
@@ -105,23 +196,27 @@ RESPONSE_SCHEMA = {
                         "unknown",
                     ],
                 },
+
                 "issue": {
                     "type": [
                         "string",
                         "null",
                     ],
                 },
+
                 "location": {
                     "type": [
                         "string",
                         "null",
                     ],
                 },
+
                 "severity": {
                     "type": [
                         "string",
                         "null",
                     ],
+
                     "enum": [
                         "low",
                         "medium",
@@ -129,14 +224,18 @@ RESPONSE_SCHEMA = {
                         None,
                     ],
                 },
+
                 "safety_risk": {
                     "type": [
                         "boolean",
                         "null",
                     ],
                 },
+
                 "language": {
-                    "type": "string",
+                    "type":
+                        "string",
+
                     "enum": [
                         "en",
                         "hi",
@@ -144,6 +243,7 @@ RESPONSE_SCHEMA = {
                     ],
                 },
             },
+
             "required": [
                 "spoken_reply",
                 "route",
@@ -153,11 +253,17 @@ RESPONSE_SCHEMA = {
                 "safety_risk",
                 "language",
             ],
-            "additionalProperties": False,
+
+            "additionalProperties":
+                False,
         },
     },
 }
 
+
+# =========================================================
+# SHORT YES / NO DETECTION
+# =========================================================
 
 YES_PHRASES = {
     "yes",
@@ -174,6 +280,8 @@ YES_PHRASES = {
     "go ahead",
     "do it",
     "true",
+    "okay",
+    "ok",
 
     "haan",
     "han",
@@ -207,7 +315,10 @@ NO_PHRASES = {
 }
 
 
-def normalize_answer(text: str) -> str:
+def normalize_answer(
+    text: str,
+) -> str:
+
     text = (
         text
         or ""
@@ -228,16 +339,103 @@ def normalize_answer(text: str) -> str:
     return text.strip()
 
 
-def is_yes(text: str) -> bool:
-    return normalize_answer(text) in YES_PHRASES
+def is_yes(
+    text: str,
+) -> bool:
+    return (
+        normalize_answer(text)
+        in YES_PHRASES
+    )
 
 
-def is_no(text: str) -> bool:
-    return normalize_answer(text) in NO_PHRASES
+def is_no(
+    text: str,
+) -> bool:
+    return (
+        normalize_answer(text)
+        in NO_PHRASES
+    )
 
+
+# =========================================================
+# SAFETY LANGUAGE
+# =========================================================
+
+def explicitly_says_no_risk(
+    text: str,
+) -> bool:
+
+    normalized = normalize_answer(
+        text
+    )
+
+    phrases = [
+        "no safety risk",
+        "not a safety risk",
+        "not dangerous",
+        "no danger",
+        "nobody is in danger",
+        "no one is in danger",
+        "not causing danger",
+        "no immediate risk",
+        "safe right now",
+        "there is no risk",
+        "there is no danger",
+    ]
+
+    return any(
+        phrase in normalized
+        for phrase in phrases
+    )
+
+
+def explicitly_describes_risk(
+    text: str,
+) -> bool:
+
+    normalized = normalize_answer(
+        text
+    )
+
+    phrases = [
+        "swerving",
+        "swerve",
+        "accident",
+        "accidents",
+        "danger",
+        "dangerous",
+        "could get hurt",
+        "can get hurt",
+        "someone may get hurt",
+        "someone could get hurt",
+        "pedestrian",
+        "pedestrians",
+        "exposed wire",
+        "exposed wires",
+        "electric shock",
+        "people are falling",
+        "people could fall",
+        "vehicles are avoiding",
+        "cars are avoiding",
+        "bikes are avoiding",
+        "immediate risk",
+        "safety risk",
+    ]
+
+    return any(
+        phrase in normalized
+        for phrase in phrases
+    )
+
+
+# =========================================================
+# CALL AGENT
+# =========================================================
 
 class CallAgent:
-    def __init__(self):
+    def __init__(
+        self,
+    ):
         api_key = os.getenv(
             "GROQ_API_KEY",
             "",
@@ -248,10 +446,14 @@ class CallAgent:
                 "GROQ_API_KEY is missing"
             )
 
-        self.model = os.getenv(
-            "GROQ_MODEL",
-            "openai/gpt-oss-20b",
-        ).strip()
+        self.model = (
+            os.getenv(
+                "GROQ_MODEL",
+                "",
+            ).strip()
+            or
+            "openai/gpt-oss-20b"
+        )
 
         self.emergency_number = os.getenv(
             "EMERGENCY_NUMBER",
@@ -277,26 +479,36 @@ class CallAgent:
 
         messages = [
             {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "system",
+                "role":
+                    "system",
+
                 "content":
-                    "CURRENT CALL STATE:\n"
-                    + state.prompt_context(),
+                    SYSTEM_PROMPT,
+            },
+
+            {
+                "role":
+                    "system",
+
+                "content":
+                    (
+                        "CURRENT PYTHON CALL STATE:\n"
+                        + state.prompt_context()
+                    ),
             },
         ]
 
-        # Keep only recent conversation turns.
         messages.extend(
             state.history[-8:]
         )
 
         messages.append(
             {
-                "role": "user",
-                "content": caller_text,
+                "role":
+                    "user",
+
+                "content":
+                    caller_text,
             }
         )
 
@@ -305,9 +517,9 @@ class CallAgent:
         for attempt in range(2):
             try:
                 token_limit = (
-                    1600
+                    1200
                     if attempt == 0
-                    else 2400
+                    else 1800
                 )
 
                 response = await (
@@ -315,13 +527,23 @@ class CallAgent:
                     .chat
                     .completions
                     .create(
-                        model=self.model,
-                        messages=messages,
-                        response_format=RESPONSE_SCHEMA,
-                        reasoning_effort="low",
-                        temperature=0.1,
-                        max_completion_tokens=token_limit,
-                        stream=False,
+                        model=
+                            self.model,
+
+                        messages=
+                            messages,
+
+                        response_format=
+                            RESPONSE_SCHEMA,
+
+                        temperature=
+                            0.1,
+
+                        max_completion_tokens=
+                            token_limit,
+
+                        stream=
+                            False,
                     )
                 )
 
@@ -330,7 +552,9 @@ class CallAgent:
                         "Groq returned no choices"
                     )
 
-                choice = response.choices[0]
+                choice = (
+                    response.choices[0]
+                )
 
                 content = (
                     choice.message.content
@@ -345,12 +569,15 @@ class CallAgent:
                     )
 
                     raise ValueError(
-                        "Groq returned empty structured "
-                        f"content; finish_reason="
+                        "Groq returned empty "
+                        "structured content; "
+                        f"finish_reason="
                         f"{finish_reason!r}"
                     )
 
-                data = json.loads(content)
+                data = json.loads(
+                    content
+                )
 
                 if not isinstance(
                     data,
@@ -388,13 +615,14 @@ class CallAgent:
 
 
     # =====================================================
-    # STATE UPDATES
+    # APPLY LLM EXTRACTION TO PYTHON STATE
     # =====================================================
 
     def _update_state(
         self,
         state: CallState,
         data: dict,
+        caller_text: str,
     ):
         issue = data.get(
             "issue"
@@ -429,19 +657,40 @@ class CallAgent:
             "medium",
             "high",
         }:
-            state.severity = severity
+            state.severity = (
+                severity
+            )
 
         safety_risk = data.get(
             "safety_risk"
         )
 
-        if isinstance(
-            safety_risk,
-            bool,
-        ):
-            state.safety_risk = (
-                safety_risk
-            )
+        # Do not blindly trust a TRUE generated
+        # from an ordinary complaint.
+        if safety_risk is True:
+
+            if (
+                state.awaiting_safety_answer
+                or explicitly_describes_risk(
+                    caller_text
+                )
+            ):
+                state.safety_risk = True
+                state.awaiting_safety_answer = False
+
+        # FALSE is even more tightly controlled.
+        # "The caller didn't mention danger"
+        # never means False.
+        elif safety_risk is False:
+
+            if (
+                state.awaiting_safety_answer
+                or explicitly_says_no_risk(
+                    caller_text
+                )
+            ):
+                state.safety_risk = False
+                state.awaiting_safety_answer = False
 
         language = data.get(
             "language"
@@ -458,7 +707,7 @@ class CallAgent:
 
 
     # =====================================================
-    # DETERMINISTIC NEXT QUESTION
+    # MUNICIPAL CONVERSATION
     # =====================================================
 
     def _municipal_next_reply(
@@ -468,33 +717,46 @@ class CallAgent:
 
         if not state.issue:
             return (
+                "Sure, I can help with that. "
                 "What civic issue would you "
                 "like to report?"
             )
 
         if not state.location:
             return (
-                "Where is the issue located?"
+                "Got it. Where exactly is "
+                "the issue located?"
             )
 
         if state.safety_risk is None:
+            state.awaiting_safety_answer = True
+
             return (
-                "Is this causing an immediate "
-                "safety risk, such as vehicles "
-                "swerving or people being in danger?"
+                "Thanks. Is this creating any "
+                "immediate safety risk, like "
+                "vehicles swerving, pedestrians "
+                "being in danger, or someone "
+                "getting hurt?"
             )
 
+        state.awaiting_safety_answer = False
         state.awaiting_confirmation = True
 
         summary = (
-            state.complaint_summary()
+            state.natural_summary()
         )
 
         return (
-            f"I have {summary}. "
-            "Should I submit this civic complaint?"
+            f"Okay. I have a report of "
+            f"{summary}. "
+            "Would you like me to submit "
+            "this civic complaint?"
         )
 
+
+    # =====================================================
+    # FALLBACK
+    # =====================================================
 
     def _fallback_reply(
         self,
@@ -502,12 +764,14 @@ class CallAgent:
     ) -> str:
 
         if state.route == "municipal":
-            return self._municipal_next_reply(
-                state
+            return (
+                self._municipal_next_reply(
+                    state
+                )
             )
 
         return (
-            "I didn't understand that clearly. "
+            "Sorry, I didn't catch that clearly. "
             "Could you say it again briefly?"
         )
 
@@ -523,18 +787,46 @@ class CallAgent:
         if self.emergency_number:
             return (
                 "This sounds like an emergency. "
-                f"Please call "
+                f"Please contact "
                 f"{self.emergency_number} "
-                "immediately. I will not create "
-                "a civic complaint for this."
+                "immediately. I won't create a "
+                "municipal complaint for this."
             )
 
         return (
             "This sounds like an emergency. "
             "Please contact your local emergency "
-            "services immediately. I will not "
-            "create a civic complaint for this."
+            "services immediately. I won't create "
+            "a municipal complaint for this."
         )
+
+
+    # =====================================================
+    # STANDARD RESPONSE OBJECT
+    # =====================================================
+
+    def _result(
+        self,
+        state: CallState,
+        reply: str,
+        ready_to_submit: bool = False,
+    ) -> dict:
+
+        state.last_bot_text = reply
+
+        return {
+            "spoken_reply":
+                reply,
+
+            "route":
+                state.route,
+
+            "ready_to_submit":
+                ready_to_submit,
+
+            "state":
+                state.to_dict(),
+        }
 
 
     # =====================================================
@@ -553,25 +845,104 @@ class CallAgent:
         ).strip()
 
         if not caller_text:
-            return {
-                "spoken_reply":
+            return self._result(
+                state,
+                (
                     "I didn't catch that. "
-                    "Could you say that again?",
-                "route":
-                    state.route,
-                "ready_to_submit":
-                    False,
-                "state":
-                    state.to_dict(),
-            }
+                    "Could you say that again?"
+                ),
+                False,
+            )
 
         state.turn_count += 1
+
         state.last_user_text = (
             caller_text
         )
 
+
         # =================================================
-        # FINAL SUBMISSION CONFIRMATION
+        # PHOTO + LOCATION LINK PERMISSION
+        # =================================================
+
+        if (
+            state.awaiting_evidence_permission
+            and state.route == "municipal"
+        ):
+
+            if is_yes(
+                caller_text
+            ):
+                state.evidence_opt_in = True
+                state.awaiting_evidence_permission = False
+
+                reply = (
+                    "Great. I have your permission "
+                    "to send a secure evidence link. "
+                    "You can use it to add a photo "
+                    "and your current location."
+                )
+
+                state.add_history(
+                    "user",
+                    caller_text,
+                )
+
+                state.add_history(
+                    "assistant",
+                    reply,
+                )
+
+                return self._result(
+                    state,
+                    reply,
+                    False,
+                )
+
+            if is_no(
+                caller_text
+            ):
+                state.evidence_opt_in = False
+                state.awaiting_evidence_permission = False
+
+                reply = (
+                    "No problem. Your complaint "
+                    "can continue without a photo "
+                    "or GPS location."
+                )
+
+                state.add_history(
+                    "user",
+                    caller_text,
+                )
+
+                state.add_history(
+                    "assistant",
+                    reply,
+                )
+
+                return self._result(
+                    state,
+                    reply,
+                    False,
+                )
+
+            reply = (
+                "Would you like me to send you "
+                "a secure link for adding a photo "
+                "and your current location? "
+                "Please say yes or no."
+            )
+
+            return self._result(
+                state,
+                reply,
+                False,
+            )
+
+
+        # =================================================
+        # FINAL COMPLAINT SUBMISSION CONFIRMATION
         # =================================================
 
         if (
@@ -585,13 +956,18 @@ class CallAgent:
                 state.confirmed = True
                 state.awaiting_confirmation = False
 
-                reply = (
-                    "Confirmed. I have your "
-                    "permission to submit the "
-                    "civic complaint."
-                )
+                # After complaint confirmation,
+                # ask separately for evidence-link consent.
+                state.awaiting_evidence_permission = True
 
-                state.last_bot_text = reply
+                reply = (
+                    "Okay. I have your permission "
+                    "to submit the complaint. "
+                    "Would you also like me to send "
+                    "you a secure link so you can "
+                    "add a photo and your current "
+                    "location?"
+                )
 
                 state.add_history(
                     "user",
@@ -603,16 +979,11 @@ class CallAgent:
                     reply,
                 )
 
-                return {
-                    "spoken_reply":
-                        reply,
-                    "route":
-                        state.route,
-                    "ready_to_submit":
-                        state.ready_to_submit(),
-                    "state":
-                        state.to_dict(),
-                }
+                return self._result(
+                    state,
+                    reply,
+                    state.ready_to_submit(),
+                )
 
             if is_no(
                 caller_text
@@ -621,11 +992,10 @@ class CallAgent:
                 state.awaiting_confirmation = False
 
                 reply = (
-                    "Okay. Tell me what you "
-                    "would like to change."
+                    "Of course. Tell me what "
+                    "you'd like to change in "
+                    "the complaint."
                 )
-
-                state.last_bot_text = reply
 
                 state.add_history(
                     "user",
@@ -637,64 +1007,46 @@ class CallAgent:
                     reply,
                 )
 
-                return {
-                    "spoken_reply":
-                        reply,
-                    "route":
-                        state.route,
-                    "ready_to_submit":
-                        False,
-                    "state":
-                        state.to_dict(),
-                }
+                return self._result(
+                    state,
+                    reply,
+                    False,
+                )
 
             reply = (
-                "Please say yes to submit, "
-                "or no if you want to change "
-                "the complaint."
+                "Just to confirm, would you like "
+                "me to submit this civic complaint? "
+                "Please say yes or no."
             )
 
-            state.last_bot_text = reply
-
-            return {
-                "spoken_reply":
-                    reply,
-                "route":
-                    state.route,
-                "ready_to_submit":
-                    False,
-                "state":
-                    state.to_dict(),
-            }
+            return self._result(
+                state,
+                reply,
+                False,
+            )
 
 
         # =================================================
-        # SAFETY-RISK YES/NO
-        #
-        # If we already know the issue and location,
-        # a simple yes/no now refers to the safety-risk
-        # question, NOT complaint submission.
+        # SAFETY QUESTION
         # =================================================
 
         if (
-            state.route == "municipal"
-            and state.issue
-            and state.location
-            and state.safety_risk is None
+            state.awaiting_safety_answer
+            and state.route == "municipal"
         ):
 
+            # Short "yes"
             if is_yes(
                 caller_text
             ):
                 state.safety_risk = True
+                state.awaiting_safety_answer = False
 
                 reply = (
                     self._municipal_next_reply(
                         state
                     )
                 )
-
-                state.last_bot_text = reply
 
                 state.add_history(
                     "user",
@@ -706,29 +1058,24 @@ class CallAgent:
                     reply,
                 )
 
-                return {
-                    "spoken_reply":
-                        reply,
-                    "route":
-                        state.route,
-                    "ready_to_submit":
-                        False,
-                    "state":
-                        state.to_dict(),
-                }
+                return self._result(
+                    state,
+                    reply,
+                    False,
+                )
 
+            # Short "no"
             if is_no(
                 caller_text
             ):
                 state.safety_risk = False
+                state.awaiting_safety_answer = False
 
                 reply = (
                     self._municipal_next_reply(
                         state
                     )
                 )
-
-                state.last_bot_text = reply
 
                 state.add_history(
                     "user",
@@ -740,16 +1087,17 @@ class CallAgent:
                     reply,
                 )
 
-                return {
-                    "spoken_reply":
-                        reply,
-                    "route":
-                        state.route,
-                    "ready_to_submit":
-                        False,
-                    "state":
-                        state.to_dict(),
-                }
+                return self._result(
+                    state,
+                    reply,
+                    False,
+                )
+
+            # Longer answers like:
+            #
+            # "Yes, cars are swerving around it"
+            #
+            # continue to Groq below.
 
 
         # =================================================
@@ -778,28 +1126,27 @@ class CallAgent:
                 )
             )
 
-            state.last_bot_text = reply
-
-            return {
-                "spoken_reply":
-                    reply,
-                "route":
-                    state.route,
-                "ready_to_submit":
-                    False,
-                "state":
-                    state.to_dict(),
-            }
+            return self._result(
+                state,
+                reply,
+                False,
+            )
 
 
         # =================================================
-        # APPLY EXTRACTED INFORMATION
+        # UPDATE STATE
         # =================================================
 
         self._update_state(
             state,
             data,
+            caller_text,
         )
+
+
+        # =================================================
+        # PUBLIC-SERVICE ROUTING
+        # =================================================
 
         proposed_route = (
             data.get("route")
@@ -811,42 +1158,78 @@ class CallAgent:
             caller_text,
         )
 
+        # When a municipal conversation is already
+        # underway, a simple location or follow-up
+        # answer should not accidentally reset the
+        # route to unknown.
+        if (
+            route == "unknown"
+            and state.route == "municipal"
+        ):
+            route = "municipal"
+
+            reason = (
+                "Preserved active municipal "
+                "conversation"
+            )
+
         state.route = route
         state.route_reason = reason
 
 
         # =================================================
-        # ROUTING
+        # EMERGENCY
         # =================================================
 
         if route == "emergency":
             state.confirmed = False
             state.awaiting_confirmation = False
+            state.awaiting_safety_answer = False
+            state.awaiting_evidence_permission = False
 
             reply = (
                 self._emergency_reply()
             )
 
+
+        # =================================================
+        # OUT OF SCOPE
+        # =================================================
+
         elif route == "other":
             state.confirmed = False
             state.awaiting_confirmation = False
+            state.awaiting_safety_answer = False
+            state.awaiting_evidence_permission = False
 
             reply = (
                 data.get(
                     "spoken_reply"
                 )
                 or
-                "This does not appear to be "
-                "a municipal civic complaint."
+                (
+                    "That doesn't appear to be "
+                    "a municipal civic complaint."
+                )
             )
 
+
+        # =================================================
+        # MUNICIPAL
+        # =================================================
+
         elif route == "municipal":
-            # Python decides the next question.
+
             reply = (
                 self._municipal_next_reply(
                     state
                 )
             )
+
+
+        # =================================================
+        # UNKNOWN
+        # =================================================
 
         else:
             reply = (
@@ -854,20 +1237,20 @@ class CallAgent:
                     "spoken_reply"
                 )
                 or
-                "Please briefly describe the "
-                "problem you are calling about."
+                (
+                    "Tell me briefly what "
+                    "problem you'd like to report."
+                )
             )
 
 
         # =================================================
-        # HISTORY
+        # SAVE HISTORY
         # =================================================
 
         reply = str(
             reply
         ).strip()
-
-        state.last_bot_text = reply
 
         state.add_history(
             "user",
@@ -879,13 +1262,8 @@ class CallAgent:
             reply,
         )
 
-        return {
-            "spoken_reply":
-                reply,
-            "route":
-                state.route,
-            "ready_to_submit":
-                state.ready_to_submit(),
-            "state":
-                state.to_dict(),
-        }
+        return self._result(
+            state,
+            reply,
+            state.ready_to_submit(),
+        )
