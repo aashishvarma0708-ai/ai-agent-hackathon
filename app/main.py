@@ -5,9 +5,12 @@ import asyncio
 import time
 
 from app.browser_phone import router as browser_phone_router
+from app.evidence_routes import router as evidence_router
 from dotenv import load_dotenv
 from app.civicresolve_client import CivicResolveClient, CivicResolveError
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from app.sms_sender import CivicResolveSMS
+from app.evidence_links import EvidenceLinkStore
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import Response
 
 from app.agent import CallAgent
@@ -50,6 +53,10 @@ app.include_router(
     browser_phone_router
 )
 
+app.include_router(
+    evidence_router
+)
+
 
 @app.get("/")
 async def root():
@@ -72,8 +79,22 @@ async def health():
 
 
 @app.post("/voice")
-async def voice():
+async def voice(
+    request: Request,
+):
+
     public_host = get_public_host()
+
+    try:
+        form = await request.form()
+
+        caller_number = str(
+            form.get("From")
+            or ""
+        ).strip()
+
+    except Exception:
+        caller_number = ""
 
     print("\n📞 Incoming Twilio voice webhook", flush=True)
 
@@ -99,7 +120,12 @@ async def voice():
     twiml = f"""
 <Response>
     <Connect>
-        <Stream url="{websocket_url}" />
+        <Stream url="{websocket_url}">
+            <Parameter
+                name="caller_number"
+                value="{caller_number}"
+            />
+        </Stream>
     </Connect>
 </Response>
 """.strip()
@@ -256,6 +282,7 @@ async def media_stream(websocket: WebSocket):
 
     stream_sid = None
     call_sid = None
+    caller_number = ""
 
     # Per-call deterministic state. Never shared across calls.
     state = CallState()
@@ -427,6 +454,10 @@ async def media_stream(websocket: WebSocket):
         try:
             groq_start = time.perf_counter()
 
+            evidence_opt_in_before = (
+                state.evidence_opt_in
+            )
+
             result = await agent.handle_turn(
                 state,
                 transcript,
@@ -570,6 +601,125 @@ async def media_stream(websocket: WebSocket):
                         "your complaint right now. "
                         "It has not been submitted. "
                         "Would you like me to try again?"
+                    )
+
+            # =================================================
+            # SECURE EVIDENCE LINK SMS
+            # =================================================
+
+            newly_opted_in = (
+                evidence_opt_in_before is not True
+                and state.evidence_opt_in is True
+            )
+
+            if (
+                newly_opted_in
+                and state.submitted
+                and state.complaint_id
+                and not state.evidence_link_sent
+            ):
+                recipient = (
+                    caller_number
+                    or os.getenv(
+                        "BROWSER_TEST_SMS_TO",
+                        "",
+                    ).strip()
+                )
+
+                if recipient:
+                    token = None
+                    link_store = None
+
+                    try:
+                        link_store = EvidenceLinkStore()
+
+                        token = link_store.issue(
+                            state.complaint_id
+                        )
+
+                        public_base = os.getenv(
+                            "PUBLIC_APP_URL",
+                            "",
+                        ).strip()
+
+                        if not public_base:
+                            public_host = get_public_host()
+
+                            if not public_host:
+                                raise RuntimeError(
+                                    "PUBLIC_HOST is not configured"
+                                )
+
+                            public_base = (
+                                f"https://{public_host}"
+                            )
+
+                        evidence_url = (
+                            f"{public_base.rstrip('/')}"
+                            f"/evidence/{token}"
+                        )
+
+                        sms = CivicResolveSMS()
+
+                        await asyncio.to_thread(
+                            sms.send_evidence_link,
+                            recipient,
+                            state.complaint_id,
+                            evidence_url,
+                        )
+
+                        state.evidence_link_sent = True
+
+                        reply = (
+                            "Done. I sent the secure evidence "
+                            "link to your phone. You can use it "
+                            "to add a photo and your current "
+                            "location. Your complaint is already "
+                            "registered."
+                        )
+
+                        print(
+                            "✅ SECURE EVIDENCE SMS SENT",
+                            flush=True,
+                        )
+
+                    except Exception as exc:
+                        if token and link_store:
+                            try:
+                                link_store.revoke(token)
+                            except Exception:
+                                pass
+
+                        state.evidence_link_sent = False
+
+                        # Permit an explicit retry.
+                        state.evidence_opt_in = None
+                        state.awaiting_evidence_permission = True
+
+                        print(
+                            "❌ EVIDENCE SMS FAILED:",
+                            f"{type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+
+                        reply = (
+                            "Your complaint is registered, "
+                            "but I could not send the evidence "
+                            "link right now. Would you like me "
+                            "to try sending it again?"
+                        )
+
+                else:
+                    print(
+                        "⚠️ No SMS recipient available",
+                        flush=True,
+                    )
+
+                    reply = (
+                        "Your complaint is registered, "
+                        "but I do not have a mobile number "
+                        "to send the evidence link to. "
+                        "Your complaint is not affected."
                     )
 
             print(f"🤖 CIVICRESOLVE: {reply}")
@@ -778,6 +928,22 @@ async def media_stream(websocket: WebSocket):
                     or data.get("streamSid")
                 )
                 call_sid = start_data.get("callSid")
+
+                custom_parameters = (
+                    start_data.get(
+                        "customParameters",
+                        {}
+                    )
+                    or {}
+                )
+
+                caller_number = str(
+                    custom_parameters.get(
+                        "caller_number",
+                        ""
+                    )
+                    or ""
+                ).strip()
 
                 state.stream_sid = stream_sid
                 state.call_sid = call_sid

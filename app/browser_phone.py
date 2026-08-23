@@ -192,10 +192,26 @@ async def browser_voice():
         f"/media-stream"
     )
 
+    test_sms_to = os.getenv(
+        "BROWSER_TEST_SMS_TO",
+        "",
+    ).strip()
+
+    parameter_xml = ""
+
+    if test_sms_to:
+        parameter_xml = (
+            '<Parameter '
+            'name="caller_number" '
+            f'value="{test_sms_to}" />'
+        )
+
     twiml = f"""
 <Response>
     <Connect>
-        <Stream url="{stream_url}" />
+        <Stream url="{stream_url}">
+            {parameter_xml}
+        </Stream>
     </Connect>
 </Response>
 """.strip()
