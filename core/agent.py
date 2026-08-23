@@ -152,7 +152,9 @@ def _normalize(data: dict) -> dict:
 def analyze_complaint(text: str, image_bytes=None, image_mime="image/jpeg") -> tuple[dict, bool]:
     """
     Returns (structured_result, used_ai).
-    If Groq is unavailable, a deterministic fallback keeps the demo alive.
+
+    Groq handles text and image understanding.
+    Deterministic fallback is used only if the AI request fails.
     """
     if not GROQ_API_KEY:
         return _normalize(_fallback(text)), False
@@ -162,42 +164,106 @@ def analyze_complaint(text: str, image_bytes=None, image_mime="image/jpeg") -> t
     try:
         if image_bytes:
             b64 = base64.b64encode(image_bytes).decode("utf-8")
+
             content = [
                 {
                     "type": "text",
-                    "text": f"{SYSTEM_PROMPT}\\n\\nCitizen complaint:\\n{text or '[No text supplied]'}",
+                    "text": (
+                        f"{SYSTEM_PROMPT}\\n\\n"
+                        f"Citizen complaint:\\n{text or '[No text supplied]'}\\n\\n"
+                        "IMPORTANT: Analyze the attached image as visual evidence. "
+                        "Return ONLY one valid JSON object. "
+                        "Do not use markdown or code fences. "
+                        "Do not add explanations before or after the JSON."
+                    ),
                 },
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:{image_mime};base64,{b64}"},
+                    "image_url": {
+                        "url": f"data:{image_mime};base64,{b64}"
+                    },
                 },
             ]
+
             model = VISION_MODEL
+
         else:
-            content = f"{SYSTEM_PROMPT}\\n\\nCitizen complaint:\\n{text}"
+            content = (
+                f"{SYSTEM_PROMPT}\\n\\n"
+                f"Citizen complaint:\\n{text}"
+            )
             model = TEXT_MODEL
 
         print(
-            f"VISION DEBUG | model={model} | image_present={bool(image_bytes)} | "
-            f"mime={image_mime} | bytes={len(image_bytes) if image_bytes else 0}",
+            f"AI DEBUG | model={model} | "
+            f"image_present={bool(image_bytes)} | "
+            f"mime={image_mime} | "
+            f"bytes={len(image_bytes) if image_bytes else 0}",
             flush=True,
         )
 
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": content}],
-            temperature=0,
-            response_format={"type": "json_object"},
-            max_completion_tokens=900,
+        request_args = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": 0,
+            "max_completion_tokens": 900,
+        }
+
+        # Text model can safely use Groq JSON Object Mode.
+        # Vision avoids response_format because Qwen vision was returning
+        # Groq json_validate_failed before the response reached our parser.
+        if not image_bytes:
+            request_args["response_format"] = {"type": "json_object"}
+
+        completion = client.chat.completions.create(**request_args)
+
+        raw = (completion.choices[0].message.content or "").strip()
+
+        # Remove optional markdown fences.
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+
+            raw = "\\n".join(lines).strip()
+
+        # First try normal JSON parsing.
+        try:
+            data = json.loads(raw)
+
+        except json.JSONDecodeError:
+            # If the model added a small amount of surrounding text,
+            # recover the JSON object itself.
+            start = raw.find("{")
+            end = raw.rfind("}")
+
+            if start == -1 or end == -1 or end <= start:
+                raise
+
+            data = json.loads(raw[start:end + 1])
+
+        print(
+            f"AI SUCCESS | model={model} | "
+            f"image_present={bool(image_bytes)} | "
+            f"domain={data.get('domain')} | "
+            f"category={data.get('category')} | "
+            f"subcategory={data.get('subcategory')}",
+            flush=True,
         )
-        raw = completion.choices[0].message.content
-        data = json.loads(raw)
+
         return _normalize(data), True
 
     except Exception as e:
         print(
-            f"VISION ERROR | model={locals().get('model', 'unknown')} | "
-            f"image_present={bool(image_bytes)} | error={repr(e)}",
+            f"AI ERROR | model={locals().get('model', 'unknown')} | "
+            f"image_present={bool(image_bytes)} | "
+            f"error={repr(e)}",
             flush=True,
         )
+
         return _normalize(_fallback(text)), False
+
