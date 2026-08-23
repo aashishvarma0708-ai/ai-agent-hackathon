@@ -177,6 +177,12 @@ def analyze_complaint(text: str, image_bytes=None, image_mime="image/jpeg") -> t
             content = f"{SYSTEM_PROMPT}\\n\\nCitizen complaint:\\n{text}"
             model = TEXT_MODEL
 
+        print(
+            f"VISION DEBUG | model={model} | image_present={bool(image_bytes)} | "
+            f"mime={image_mime} | bytes={len(image_bytes) if image_bytes else 0}",
+            flush=True,
+        )
+
         completion = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": content}],
@@ -188,5 +194,10 @@ def analyze_complaint(text: str, image_bytes=None, image_mime="image/jpeg") -> t
         data = json.loads(raw)
         return _normalize(data), True
 
-    except Exception:
+    except Exception as e:
+        print(
+            f"VISION ERROR | model={locals().get('model', 'unknown')} | "
+            f"image_present={bool(image_bytes)} | error={repr(e)}",
+            flush=True,
+        )
         return _normalize(_fallback(text)), False
