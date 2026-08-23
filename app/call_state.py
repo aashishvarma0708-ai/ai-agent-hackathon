@@ -123,7 +123,11 @@ class CallState:
         )
 
         summary = (
-            f"{issue} near {location}"
+            (
+                f"{issue} {location}"
+                if location.lower().startswith("near ")
+                else f"{issue} near {location}"
+            )
         )
 
         if self.safety_risk is True:

@@ -975,6 +975,64 @@ class CallAgent:
 
 
         # =================================================
+        # COMPLETED CALL GUARD
+        # =================================================
+        #
+        # Once the real complaint has been registered and
+        # evidence consent has been resolved, never fall back
+        # into complaint extraction / confirmation again.
+
+        if (
+            state.submitted
+            and not state.awaiting_evidence_permission
+        ):
+            complaint_id = (
+                state.complaint_id
+                or "your complaint"
+            )
+
+            if state.evidence_link_sent:
+                reply = (
+                    "You're welcome. "
+                    f"Your complaint {complaint_id} "
+                    "is registered, and the secure "
+                    "evidence link has been sent to "
+                    "your phone. Goodbye."
+                )
+
+            elif state.evidence_opt_in is False:
+                reply = (
+                    "You're welcome. "
+                    f"Your complaint {complaint_id} "
+                    "is registered. No evidence link "
+                    "was requested. Goodbye."
+                )
+
+            else:
+                reply = (
+                    "You're welcome. "
+                    f"Your complaint {complaint_id} "
+                    "is registered. Goodbye."
+                )
+
+            state.add_history(
+                "user",
+                caller_text,
+            )
+
+            state.add_history(
+                "assistant",
+                reply,
+            )
+
+            return self._result(
+                state,
+                reply,
+                False,
+            )
+
+
+        # =================================================
         # FINAL COMPLAINT SUBMISSION CONFIRMATION
         # =================================================
 
