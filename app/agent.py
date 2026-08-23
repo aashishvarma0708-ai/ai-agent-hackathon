@@ -342,19 +342,52 @@ def normalize_answer(
 def is_yes(
     text: str,
 ) -> bool:
-    return (
-        normalize_answer(text)
-        in YES_PHRASES
-    )
+    normalized = normalize_answer(text)
+
+    if normalized in YES_PHRASES:
+        return True
+
+    natural_yes = {
+        "yes i do",
+        "yes please",
+        "yes sure",
+        "sure",
+        "sure please",
+        "please do",
+        "go ahead",
+        "absolutely",
+        "of course",
+        "yes send it",
+        "send it",
+        "send me the link",
+    }
+
+    return normalized in natural_yes
 
 
 def is_no(
     text: str,
 ) -> bool:
-    return (
-        normalize_answer(text)
-        in NO_PHRASES
-    )
+    normalized = normalize_answer(text)
+
+    if normalized in NO_PHRASES:
+        return True
+
+    natural_no = {
+        "no thanks",
+        "no thank you",
+        "not now",
+        "please dont",
+        "please don't",
+        "dont send it",
+        "don't send it",
+        "do not send it",
+        "i dont want it",
+        "i don't want it",
+        "skip it",
+    }
+
+    return normalized in natural_no
 
 
 # =========================================================
