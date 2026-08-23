@@ -23,12 +23,105 @@ import {
   LogOut,
   KeyRound,
   UserCheck,
-  Shield
+  Shield,
+  RotateCcw,
+  ImageOff,
+  Wrench,
+  FileText,
+  ChevronRight,
+  ArrowRight
 } from 'lucide-react';
 import { useComplaints } from '../context/ComplaintContext';
 import { adminLogin } from '../api/civicresolve';
 import PriorityBadge from '../components/PriorityBadge';
 import StatusBadge from '../components/StatusBadge';
+import ComplaintLifecycle from '../components/ComplaintLifecycle';
+
+const ADMIN_ALLOWED_TRANSITIONS = {
+  NEW: ['ACKNOWLEDGED', 'ASSIGNED', 'REJECTED', 'EXTERNALLY_ROUTED', 'EMERGENCY_DISPATCHED'],
+  ACKNOWLEDGED: ['ASSIGNED', 'WORK_STARTED', 'REJECTED', 'EXTERNALLY_ROUTED', 'EMERGENCY_DISPATCHED'],
+  ASSIGNED: ['WORK_STARTED', 'RESOLUTION_SUBMITTED', 'ACKNOWLEDGED', 'REJECTED'],
+  WORK_STARTED: ['RESOLUTION_SUBMITTED', 'ASSIGNED', 'REOPENED'],
+  RESOLUTION_SUBMITTED: ['AI_VERIFICATION_PENDING', 'RESOLVED_PENDING_CITIZEN', 'HUMAN_REVIEW_REQUIRED', 'REOPENED'],
+  AI_VERIFICATION_PENDING: ['RESOLVED_PENDING_CITIZEN', 'HUMAN_REVIEW_REQUIRED', 'REOPENED'],
+  HUMAN_REVIEW_REQUIRED: ['RESOLVED_PENDING_CITIZEN', 'REOPENED', 'ASSIGNED', 'WORK_STARTED', 'CLOSED'],
+  RESOLVED_PENDING_CITIZEN: ['CLOSED', 'REOPENED'],
+  REOPENED: ['ASSIGNED', 'WORK_STARTED', 'RESOLUTION_SUBMITTED'],
+  CLOSED: ['REOPENED'],
+  REJECTED: ['NEW', 'REOPENED'],
+  EXTERNALLY_ROUTED: ['NEW'],
+  EMERGENCY_DISPATCHED: ['CLOSED'],
+};
+
+const getNextActionInfo = (complaint) => {
+  if (!complaint) return null;
+  const status = (complaint.status || 'NEW').toUpperCase();
+
+  switch (status) {
+    case 'NEW':
+      return {
+        prompt: 'Acknowledge this complaint.',
+        actionLabel: 'Acknowledge',
+        actionType: 'ACKNOWLEDGE',
+      };
+    case 'ACKNOWLEDGED':
+      return {
+        prompt: 'Assign the complaint to the responsible field team.',
+        actionLabel: 'Assign',
+        actionType: 'ASSIGN',
+      };
+    case 'ASSIGNED':
+      return {
+        prompt: 'Start field work or update field assignment.',
+        actionLabel: 'Start Work',
+        actionType: 'START_WORK',
+      };
+    case 'WORK_STARTED':
+      return {
+        prompt: 'Complete the work and upload resolution evidence.',
+        actionLabel: 'Mark Work Completed',
+        actionType: 'COMPLETE_WORK',
+      };
+    case 'RESOLUTION_SUBMITTED':
+      return {
+        prompt: 'Run AI resolution verification.',
+        actionLabel: 'Run AI Verification',
+        actionType: 'RUN_AI_VERIFY',
+      };
+    case 'AI_VERIFICATION_PENDING':
+      return {
+        prompt: 'AI verification is in progress.',
+        actionLabel: 'Inspect Evidence',
+        actionType: 'VIEW_EVIDENCE',
+      };
+    case 'HUMAN_REVIEW_REQUIRED':
+      return {
+        prompt: 'Review the before/after evidence and approve or reopen the case.',
+        actionLabel: 'Review & Decide',
+        actionType: 'HUMAN_REVIEW',
+      };
+    case 'RESOLVED_PENDING_CITIZEN':
+      return {
+        prompt: 'Waiting for citizen confirmation.',
+        actionLabel: 'Inspect Evidence',
+        actionType: 'VIEW_EVIDENCE',
+      };
+    case 'REOPENED':
+      return {
+        prompt: 'Correct the issue and submit new resolution evidence.',
+        actionLabel: 'Mark Work Completed',
+        actionType: 'COMPLETE_WORK',
+      };
+    case 'CLOSED':
+      return {
+        prompt: 'Complaint lifecycle complete.',
+        actionLabel: null,
+        actionType: 'NONE',
+      };
+    default:
+      return null;
+  }
+};
 
 export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) {
   const { 
@@ -113,11 +206,12 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
   // Routine update modal state
   const [selectedComplaint, setSelectedComplaint] = useState(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
-  const [newStatus, setNewStatus] = useState('ASSIGNED');
+  const [newStatus, setNewStatus] = useState('');
   const [statusNote, setStatusNote] = useState('');
   const [updateSuccess, setUpdateSuccess] = useState(false);
+  const [updateError, setUpdateError] = useState('');
 
-  // Dedicated Work Completion modal state (Requirements 1, 2, 3)
+  // Dedicated Work Completion modal state
   const [completionModalOpen, setCompletionModalOpen] = useState(false);
   const [completionComplaint, setCompletionComplaint] = useState(null);
   const [completionNote, setCompletionNote] = useState('');
@@ -128,9 +222,16 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
   const [completionError, setCompletionError] = useState('');
   const [completionSuccess, setCompletionSuccess] = useState(false);
 
-  // Before / After Evidence inspection modal state (Requirement 6)
+  // Before / After Evidence inspection modal state
   const [evidenceComplaint, setEvidenceComplaint] = useState(null);
   const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
+
+  // Reopen Case Modal State
+  const [reopenModalOpen, setReopenModalOpen] = useState(false);
+  const [reopenComplaint, setReopenComplaint] = useState(null);
+  const [reopenReason, setReopenReason] = useState('');
+  const [reopenSubmitting, setReopenSubmitting] = useState(false);
+  const [reopenError, setReopenError] = useState('');
 
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -167,16 +268,21 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
 
   const handleOpenUpdate = (complaint) => {
     setSelectedComplaint(complaint);
-    setNewStatus(complaint.status === 'NEW' ? 'ACKNOWLEDGED' : (complaint.status === 'ACKNOWLEDGED' ? 'ASSIGNED' : (complaint.status === 'ASSIGNED' ? 'WORK_STARTED' : 'ASSIGNED')));
+    const curr = (complaint.status || 'NEW').toUpperCase();
+    const allowed = ADMIN_ALLOWED_TRANSITIONS[curr] || [];
+    setNewStatus(allowed.length > 0 ? allowed[0] : curr);
     setStatusNote('');
+    setUpdateError('');
+    setUpdateSuccess(false);
     setUpdateModalOpen(true);
   };
 
   const handleSaveStatus = async (e) => {
     e.preventDefault();
-    if (!selectedComplaint) return;
+    if (!selectedComplaint || !newStatus) return;
 
     try {
+      setUpdateError('');
       await updateComplaintStatus(
         selectedComplaint.complaint_id, 
         newStatus, 
@@ -191,10 +297,11 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
       }, 600);
     } catch (err) {
       console.error("Failed to update status:", err);
+      setUpdateError(err.message || 'Failed to update status.');
     }
   };
 
-  // Dedicated Work Completion Handlers (Requirements 1, 2, 3)
+  // Dedicated Work Completion Handlers
   const handleOpenCompletion = (complaint) => {
     setCompletionComplaint(complaint);
     setCompletionNote('');
@@ -255,6 +362,77 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
   const handleOpenEvidence = (complaint) => {
     setEvidenceComplaint(complaint);
     setEvidenceModalOpen(true);
+  };
+
+  // Reopen Case Handlers
+  const handleOpenReopen = (complaint) => {
+    setReopenComplaint(complaint);
+    setReopenReason('');
+    setReopenError('');
+    setReopenModalOpen(true);
+  };
+
+  const handleConfirmReopen = async (e) => {
+    e.preventDefault();
+    if (!reopenComplaint) return;
+
+    if (!reopenReason.trim()) {
+      setReopenError('A specific reason for reopening is required.');
+      return;
+    }
+
+    setReopenSubmitting(true);
+    setReopenError('');
+
+    try {
+      await updateComplaintStatus(
+        reopenComplaint.complaint_id,
+        'REOPENED',
+        `Authority Reopened Case: "${reopenReason.trim()}"`
+      );
+      setReopenModalOpen(false);
+      setEvidenceModalOpen(false);
+      await refreshComplaints();
+    } catch (err) {
+      console.error("Failed to reopen case:", err);
+      setReopenError(err.message || 'Failed to reopen case.');
+    } finally {
+      setReopenSubmitting(false);
+    }
+  };
+
+  const handleApproveResolution = async (complaint) => {
+    if (!complaint) return;
+    try {
+      await updateComplaintStatus(
+        complaint.complaint_id,
+        'RESOLVED_PENDING_CITIZEN',
+        'Authority manually approved resolution evidence after human review.'
+      );
+      setEvidenceModalOpen(false);
+      await refreshComplaints();
+    } catch (err) {
+      console.error('Failed to approve resolution:', err);
+    }
+  };
+
+  const handleExecuteNextAction = async (item, actionType) => {
+    if (actionType === 'ACKNOWLEDGE') {
+      await updateComplaintStatus(item.complaint_id, 'ACKNOWLEDGED', 'Complaint acknowledged by municipal authority desk.');
+      await refreshComplaints();
+    } else if (actionType === 'ASSIGN') {
+      handleOpenUpdate(item);
+    } else if (actionType === 'START_WORK') {
+      await updateComplaintStatus(item.complaint_id, 'WORK_STARTED', 'Field crew initiated on-site corrective work.');
+      await refreshComplaints();
+    } else if (actionType === 'COMPLETE_WORK') {
+      handleOpenCompletion(item);
+    } else if (actionType === 'RUN_AI_VERIFY') {
+      await verifyResolution(item.complaint_id, 'AI verification manually triggered by authority desk.');
+      await refreshComplaints();
+    } else if (actionType === 'HUMAN_REVIEW' || actionType === 'VIEW_EVIDENCE') {
+      handleOpenEvidence(item);
+    }
   };
 
   if (!isAuthenticated) {
@@ -500,7 +678,8 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
             <option value="WORK_STARTED">WORK STARTED</option>
             <option value="RESOLUTION_SUBMITTED">RESOLUTION SUBMITTED</option>
             <option value="AI_VERIFICATION_PENDING">AI VERIFIED</option>
-            <option value="RESOLVED_PENDING_CITIZEN">RESOLVED (CITIZEN REVIEW)</option>
+            <option value="HUMAN_REVIEW_REQUIRED">HUMAN REVIEW REQUIRED</option>
+            <option value="RESOLVED_PENDING_CITIZEN">RESOLVED (CITIZEN CONFIRMATION)</option>
             <option value="CLOSED">CLOSED</option>
             <option value="REOPENED">REOPENED</option>
           </select>
@@ -517,14 +696,16 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
                 <th className="px-4 py-3.5">Priority / Risk</th>
                 <th className="px-4 py-3.5">Category & Summary</th>
                 <th className="px-4 py-3.5">Location / Ward</th>
-                <th className="px-4 py-3.5">Assigned Department</th>
-                <th className="px-4 py-3.5">Status</th>
+                <th className="px-4 py-3.5">Status & Lifecycle</th>
+                <th className="px-4 py-3.5">Next Required Action</th>
                 <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 font-sans">
               {filtered.length > 0 ? (
                 filtered.map((item) => {
+                  const nextAction = getNextActionInfo(item);
+
                   return (
                     <tr key={item.complaint_id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-5 py-4 font-mono font-black text-slate-900">
@@ -565,14 +746,8 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
                       </td>
 
                       <td className="px-4 py-4 text-slate-700">
-                        <span className="truncate block max-w-[160px] font-medium" title={item.location_text}>
+                        <span className="truncate block max-w-[150px] font-medium" title={item.location_text}>
                           {item.jurisdiction || item.location_text || 'GPS Landmark'}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-4 text-slate-700">
-                        <span className="font-bold truncate block max-w-[180px] text-slate-900" title={item.department || item.external_service_name}>
-                          {item.department || item.external_service_name || 'Verification Desk'}
                         </span>
                       </td>
 
@@ -580,21 +755,43 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
                         <StatusBadge status={item.status} size="sm" />
                       </td>
 
-                      <td className="px-5 py-4 text-right space-x-2">
+                      {/* Next Required Action Column */}
+                      <td className="px-4 py-4 max-w-xs">
+                        {nextAction ? (
+                          <div className="space-y-1">
+                            <p className="text-[11px] text-slate-700 font-medium leading-snug">
+                              {nextAction.prompt}
+                            </p>
+                            {nextAction.actionLabel && (
+                              <button
+                                onClick={() => handleExecuteNextAction(item, nextAction.actionType)}
+                                className="px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[11px] font-bold transition-all inline-flex items-center gap-1 shadow-2xs hover:scale-102 active:scale-98"
+                              >
+                                <span>{nextAction.actionLabel}</span>
+                                <ArrowRight className="w-3 h-3 text-red-600" />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">No action required</span>
+                        )}
+                      </td>
+
+                      <td className="px-5 py-4 text-right space-x-1.5 whitespace-nowrap">
                         {/* Dedicated Mark Work Completed Button */}
                         {item.domain === 'municipal' && ['ASSIGNED', 'WORK_STARTED', 'REOPENED'].includes(item.status) && (
                           <button
                             onClick={() => handleOpenCompletion(item)}
                             title="Mark work completed and submit resolution proof"
-                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all shadow-sm inline-flex items-center gap-1.5"
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all shadow-sm inline-flex items-center gap-1"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Mark Work Completed</span>
+                            <span className="hidden xl:inline">Mark Completed</span>
                           </button>
                         )}
 
                         {/* View Before / After Evidence Button */}
-                        {(item.resolution_image_url || item.ai_verification_result) && (
+                        {(item.resolution_image_url || item.initial_image_url || item.ai_verification_result || item.status === 'HUMAN_REVIEW_REQUIRED') && (
                           <button
                             onClick={() => handleOpenEvidence(item)}
                             title="Inspect Before / After repair proof and AI verification"
@@ -608,7 +805,7 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
                         {/* Routine Update Status Button */}
                         <button
                           onClick={() => handleOpenUpdate(item)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 hover:text-slate-900 font-bold text-xs transition-colors border border-slate-300 inline-flex items-center gap-1 shadow-xs"
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 hover:text-slate-900 font-bold text-xs transition-colors border border-slate-300 inline-flex items-center gap-1 shadow-xs"
                         >
                           <Edit3 className="w-3 h-3 text-red-600" />
                           <span>Update</span>
@@ -629,7 +826,7 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
         </div>
       </div>
 
-      {/* Civic Hotspots Geographic Clusters (Phase 13) */}
+      {/* Civic Hotspots Geographic Clusters */}
       {analytics?.hotspots && analytics.hotspots.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-sm font-black uppercase tracking-wider text-slate-800 font-mono flex items-center gap-2">
@@ -662,7 +859,7 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
         </div>
       )}
 
-      {/* Real Department Performance KPIs (Phase 14) */}
+      {/* Real Department Performance KPIs */}
       {analytics?.department_performance && (
         <div className="space-y-4">
           <h3 className="text-sm font-black uppercase tracking-wider text-slate-800 font-mono flex items-center gap-2">
@@ -690,7 +887,7 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
         </div>
       )}
 
-      {/* Dedicated Work Completion Modal (Requirements 1, 2, 3) */}
+      {/* Dedicated Work Completion Modal */}
       {completionModalOpen && completionComplaint && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-lg w-full space-y-5 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
@@ -762,7 +959,7 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
                 )}
               </div>
 
-              {/* Completed By (Optional for MVP) */}
+              {/* Completed By */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
                   Completed By / Crew Name <span className="text-slate-500">(Optional)</span>
@@ -823,15 +1020,15 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
         </div>
       )}
 
-      {/* Before / After Evidence Viewer Modal (Requirement 6) */}
+      {/* Before / After Evidence Viewer & Lifecycle Modal */}
       {evidenceModalOpen && evidenceComplaint && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-2xl w-full space-y-5 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-3xl w-full space-y-5 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <div>
                 <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-700 font-bold flex items-center gap-1">
                   <Sparkles className="w-3.5 h-3.5 text-cyan-600" />
-                  <span>Multimodal Before / After Evidence Audit</span>
+                  <span>Multimodal Evidence Audit & Lifecycle Review</span>
                 </span>
                 <h3 className="text-base font-black text-[#162044] font-mono">{evidenceComplaint.complaint_id}</h3>
               </div>
@@ -843,46 +1040,140 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
               </button>
             </div>
 
-            {/* Side by side comparison */}
+            {/* Lifecycle Progress Visualizer */}
+            <div className="space-y-2">
+              <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500">Lifecycle Progress</span>
+              <ComplaintLifecycle currentStatus={evidenceComplaint.status} />
+            </div>
+
+            {/* Side by side comparison (REAL IMAGES ONLY, NO STOCK/UNSPLASH FALLBACKS) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <span className="text-xs font-bold text-slate-700">1. Citizen Initial Evidence (Before)</span>
-                <div className="rounded-2xl overflow-hidden border border-slate-300 h-48 bg-slate-100 shadow-inner">
-                  <img 
-                    src={evidenceComplaint.initial_image_url || "https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&w=600&q=80"} 
-                    alt="Before evidence" 
-                    className="w-full h-full object-cover" 
-                  />
+                <div className="rounded-2xl overflow-hidden border border-slate-300 h-48 bg-slate-100 flex items-center justify-center shadow-inner">
+                  {evidenceComplaint.initial_image_url ? (
+                    <img 
+                      src={evidenceComplaint.initial_image_url} 
+                      alt="Citizen initial evidence" 
+                      className="w-full h-full object-cover" 
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-center p-4 text-slate-400 space-y-1">
+                      <ImageOff className="w-8 h-8 text-slate-400" />
+                      <span className="text-xs font-medium text-slate-500">No citizen evidence photo was uploaded.</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="space-y-1.5">
                 <span className="text-xs font-bold text-slate-700">2. Field Authority Proof (After Repair)</span>
-                <div className="rounded-2xl overflow-hidden border border-slate-300 h-48 bg-slate-100 shadow-inner">
-                  <img 
-                    src={evidenceComplaint.resolution_image_url || "https://images.unsplash.com/photo-1590402494682-cd3fb53b1f70?auto=format&fit=crop&w=600&q=80"} 
-                    alt="After evidence" 
-                    className="w-full h-full object-cover" 
-                  />
+                <div className="rounded-2xl overflow-hidden border border-slate-300 h-48 bg-slate-100 flex items-center justify-center shadow-inner">
+                  {evidenceComplaint.resolution_image_url ? (
+                    <img 
+                      src={evidenceComplaint.resolution_image_url} 
+                      alt="Field resolution proof" 
+                      className="w-full h-full object-cover" 
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-center p-4 text-slate-400 space-y-1">
+                      <ImageOff className="w-8 h-8 text-slate-400" />
+                      <span className="text-xs font-medium text-slate-500">No resolution evidence photo has been submitted.</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* AI Verification summary */}
-            {evidenceComplaint.ai_verification_result && (
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>AI Resolution Verification: {evidenceComplaint.ai_verification_result.appears_resolved ? 'Appears Resolved' : 'Requires Review'}</span>
-                  </span>
-                  <span className="text-xs font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                    {Math.round((evidenceComplaint.ai_verification_result.confidence || 0.94) * 100)}% Confidence
-                  </span>
+            {/* AI Verification Result Panel */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5 font-mono uppercase">
+                  <Sparkles className="w-4 h-4 text-red-600" />
+                  <span>AI RESOLUTION VERIFICATION</span>
+                </span>
+                <span className="text-xs font-mono font-bold text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-200">
+                  {(() => {
+                    const conf = evidenceComplaint?.ai_verification_result?.confidence;
+                    if (typeof conf === 'number') {
+                      const pct = conf <= 1 ? Math.round(conf * 100) : Math.round(conf);
+                      return `${pct}% Confidence`;
+                    }
+                    return 'Confidence unavailable';
+                  })()}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-xs text-slate-600 font-bold">Result:</span>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold font-mono ${
+                  evidenceComplaint.ai_verification_result?.appears_resolved
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : evidenceComplaint.ai_verification_result?.requires_human_review || evidenceComplaint.status === 'HUMAN_REVIEW_REQUIRED'
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    : 'bg-red-100 text-red-800 border border-red-300'
+                }`}>
+                  {evidenceComplaint.ai_verification_result?.appears_resolved
+                    ? 'Appears Resolved'
+                    : evidenceComplaint.ai_verification_result?.requires_human_review || evidenceComplaint.status === 'HUMAN_REVIEW_REQUIRED'
+                    ? 'Requires Human Review'
+                    : 'Resolution Not Verified'}
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-700 font-medium pt-1 leading-relaxed">
+                {evidenceComplaint.ai_verification_result?.summary || evidenceComplaint.resolution_summary || "Visual comparison recorded by automated resolution pipeline."}
+              </p>
+            </div>
+
+            {/* Next Required Action Banner & Authority Decision Buttons */}
+            {evidenceComplaint.status === 'HUMAN_REVIEW_REQUIRED' && (
+              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 space-y-3">
+                <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>NEXT REQUIRED ACTION: Review before/after evidence and approve or reopen the case.</span>
                 </div>
-                <p className="text-xs text-slate-700 font-medium">
-                  {evidenceComplaint.ai_verification_result.summary || evidenceComplaint.resolution_summary || "Visual comparison confirms repair completed."}
-                </p>
+                <div className="flex flex-wrap items-center justify-end gap-2.5 pt-1">
+                  <button
+                    onClick={() => handleOpenReopen(evidenceComplaint)}
+                    className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reopen Case</span>
+                  </button>
+                  <button
+                    onClick={() => handleApproveResolution(evidenceComplaint)}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Approve Resolution</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {evidenceComplaint.status === 'RESOLVED_PENDING_CITIZEN' && (
+              <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-medium flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+                <span>Resolution verified. Waiting for citizen confirmation.</span>
+              </div>
+            )}
+
+            {evidenceComplaint.status === 'REOPENED' && (
+              <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-900 text-xs font-medium flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <RotateCcw className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>Case Reopened — corrective field work required before re-submission.</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setEvidenceModalOpen(false);
+                    handleOpenCompletion(evidenceComplaint);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold"
+                >
+                  Submit New Resolution
+                </button>
               </div>
             )}
 
@@ -898,7 +1189,7 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
         </div>
       )}
 
-      {/* Routine Update Status Modal */}
+      {/* Routine Update Status Modal (Constrained to Allowed Transitions) */}
       {updateModalOpen && selectedComplaint && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-lg w-full space-y-5 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
@@ -906,6 +1197,7 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
               <div>
                 <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500 font-bold">Update Authority Status</span>
                 <h3 className="text-base font-black text-[#162044] font-mono">{selectedComplaint.complaint_id}</h3>
+                <span className="text-xs text-slate-600 font-mono">Current Status: <strong>{selectedComplaint.status}</strong></span>
               </div>
               <button 
                 onClick={() => setUpdateModalOpen(false)}
@@ -915,21 +1207,44 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
               </button>
             </div>
 
+            {updateError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2 font-medium">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{updateError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSaveStatus} className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Status Transition
+                  Allowed Status Transitions (From {selectedComplaint.status})
                 </label>
-                <select
-                  value={newStatus}
-                  onChange={(e) => setNewStatus(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 font-mono focus:outline-none focus:border-red-500 shadow-inner"
-                >
-                  <option value="ACKNOWLEDGED">ACKNOWLEDGED (Supervisor Review)</option>
-                  <option value="ASSIGNED">ASSIGNED (Dispatched to Crew)</option>
-                  <option value="WORK_STARTED">WORK_STARTED (On-site Work in Progress)</option>
-                  <option value="REOPENED">REOPENED (Reopened Case)</option>
-                </select>
+                {(() => {
+                  const curr = (selectedComplaint.status || 'NEW').toUpperCase();
+                  const allowed = ADMIN_ALLOWED_TRANSITIONS[curr] || [];
+
+                  if (allowed.length === 0) {
+                    return (
+                      <p className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 italic">
+                        No direct administrative status transitions available from status '{curr}'. Please use the dedicated resolution workflow.
+                      </p>
+                    );
+                  }
+
+                  return (
+                    <select
+                      value={newStatus}
+                      onChange={(e) => setNewStatus(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 font-mono focus:outline-none focus:border-red-500 shadow-inner"
+                    >
+                      {allowed.map((st) => (
+                        <option key={st} value={st}>
+                          {st}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })()}
               </div>
 
               <div>
@@ -955,7 +1270,8 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#e53935] hover:bg-[#d32f2f] text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-md shadow-red-500/20"
+                  disabled={!newStatus || (ADMIN_ALLOWED_TRANSITIONS[(selectedComplaint.status || 'NEW').toUpperCase()] || []).length === 0}
+                  className="px-5 py-2 rounded-xl bg-[#e53935] hover:bg-[#d32f2f] text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-md shadow-red-500/20 disabled:opacity-50"
                 >
                   {updateSuccess ? (
                     <>
@@ -964,6 +1280,79 @@ export default function AuthorityDashboard({ setActivePage, setTrackSearchId }) 
                     </>
                   ) : (
                     <span>Save Transition</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reopen Case Reason Modal */}
+      {reopenModalOpen && reopenComplaint && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-md w-full space-y-5 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-red-700 font-bold flex items-center gap-1">
+                  <RotateCcw className="w-3.5 h-3.5 text-red-600" />
+                  <span>Reopen Case for Rework</span>
+                </span>
+                <h3 className="text-base font-black text-[#162044] font-mono">{reopenComplaint.complaint_id}</h3>
+              </div>
+              <button 
+                onClick={() => setReopenModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {reopenError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2 font-medium">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{reopenError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmReopen} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Reason for Reopening <span className="text-red-600">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={reopenReason}
+                  onChange={(e) => { setReopenReason(e.target.value); setReopenError(''); }}
+                  placeholder="e.g. Uploaded repair photo does not show the reported pothole repaired."
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-red-500 shadow-inner"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setReopenModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={reopenSubmitting || !reopenReason.trim()}
+                  className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-red-500/20 disabled:opacity-50"
+                >
+                  {reopenSubmitting ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                      <span>Reopening Case...</span>
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="w-4 h-4 text-white" />
+                      <span>Confirm & Reopen</span>
+                    </>
                   )}
                 </button>
               </div>

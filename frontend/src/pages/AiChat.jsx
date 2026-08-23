@@ -6,17 +6,148 @@ import {
   User, 
   Sparkles, 
   ArrowRight, 
-  RotateCcw,
-  Navigation,
-  CheckCircle2,
-  AlertCircle,
-  Users,
-  AlertTriangle
+  RotateCcw, 
+  Navigation, 
+  CheckCircle2, 
+  AlertCircle, 
+  Users, 
+  AlertTriangle,
+  Upload,
+  Image as ImageIcon,
+  X,
+  Camera,
+  Check
 } from 'lucide-react';
 import { useComplaints } from '../context/ComplaintContext';
 import PriorityBadge from '../components/PriorityBadge';
 import StatusBadge from '../components/StatusBadge';
 import RiskGauge from '../components/RiskGauge';
+
+const normalizeChatText = (value = '') =>
+  value
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getBasicChatReply = (rawText) => {
+  const text = normalizeChatText(rawText);
+
+  if (!text) return null;
+
+  const greetings = [
+    'hi',
+    'hello',
+    'hey',
+    'hii',
+    'hiii',
+    'hello there'
+  ];
+
+  if (greetings.includes(text)) {
+    return "Hello! I'm CivicResolve AI. I can help you report a civic issue, identify the responsible department, check an existing complaint, or guide you through the reporting process.";
+  }
+
+  if (
+    text === 'good morning' ||
+    text === 'morning'
+  ) {
+    return "Good morning! How can I help with a civic issue today?";
+  }
+
+  if (
+    text === 'good afternoon' ||
+    text === 'afternoon'
+  ) {
+    return "Good afternoon! Tell me about the civic issue you'd like help with.";
+  }
+
+  if (
+    text === 'good evening' ||
+    text === 'evening'
+  ) {
+    return "Good evening! How can CivicResolve help you today?";
+  }
+
+  if (
+    [
+      'thanks',
+      'thank you',
+      'thankyou',
+      'thanks a lot',
+      'thank you so much'
+    ].includes(text)
+  ) {
+    return "You're welcome. I'm here whenever you need help with a civic complaint.";
+  }
+
+  if (
+    [
+      'bye',
+      'goodbye',
+      'see you',
+      'see you later'
+    ].includes(text)
+  ) {
+    return "Goodbye! If you need to report or track a civic issue later, CivicResolve will be here to help.";
+  }
+
+  if (
+    [
+      'help',
+      'what can you do',
+      'what do you do',
+      'how can you help'
+    ].includes(text)
+  ) {
+    return "I can help you report civic problems such as potholes, garbage, drainage, water supply, streetlights and damaged infrastructure. I can also help identify the responsible department and guide you to track an existing complaint.";
+  }
+
+  return null;
+};
+
+const isAffirmativeResponse = (text) => {
+  const t = normalizeChatText(text);
+  const affirmations = [
+    'yes',
+    'yeah',
+    'yep',
+    'yes please',
+    'yes do it',
+    'sure',
+    'okay',
+    'ok',
+    'upload',
+    'add photo',
+    'i have a photo',
+    'attach photo',
+    'photo',
+    'i have photo',
+    'with photo',
+    'take photo'
+  ];
+  return affirmations.includes(t) || t.startsWith('yes') || t.includes('upload') || t.includes('attach');
+};
+
+const isNegativeResponse = (text) => {
+  const t = normalizeChatText(text);
+  const negations = [
+    'no',
+    'no thanks',
+    'skip',
+    'not now',
+    "i don't have one",
+    "i dont have one",
+    'continue without photo',
+    'no photo',
+    'without photo',
+    'none',
+    'nope',
+    'nah',
+    'dont have'
+  ];
+  return negations.includes(t) || t.startsWith('no') || t.includes('skip') || t.includes('without');
+};
 
 export default function AiChat({ setActivePage, setTrackSearchId }) {
   const { submitNewComplaint } = useComplaints();
@@ -33,9 +164,22 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [extractedComplaint, setExtractedComplaint] = useState(null);
-  const [collectedData, setCollectedData] = useState({ issueText: '', location: '', coords: null });
+  
+  // Conversational state
+  const [collectedData, setCollectedData] = useState({
+    issueText: '',
+    location: '',
+    coords: null,
+    awaitingLocation: false,
+    awaitingPhotoDecision: false,
+    awaitingPhotoUpload: false,
+    photoFile: null,
+    photoPreview: null
+  });
+
   const chatContainerRef = useRef(null);
   const isFirstRender = useRef(true);
+  const fileInputRef = useRef(null);
 
   const quickPrompts = [
     "Huge pothole outside community center on 100ft road, bikes slipping",
@@ -45,7 +189,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
     "3 streetlights on Park View Avenue are pitch black at night"
   ];
 
-  // Prevent auto-scrolling the whole window on mount; only scroll internal chat box on new user/bot messages
+  // Auto-scroll chat container on new message or typing state
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
@@ -57,7 +201,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
         behavior: 'smooth'
       });
     }
-  }, [messages, isTyping]);
+  }, [messages, isTyping, collectedData.awaitingPhotoUpload, collectedData.awaitingPhotoDecision]);
 
   const handleShareLocation = () => {
     if (!navigator.geolocation) {
@@ -78,50 +222,16 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
     );
   };
 
-  const handleSendMessage = async (textToSend) => {
-    const query = textToSend || input;
-    if (!query.trim()) return;
-
-    const userMsg = {
-      id: Date.now(),
-      sender: 'user',
-      text: query,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
+  // Canonical submission function
+  const executeComplaintSubmission = async (issueText, locationText, coords, imageFile) => {
     setIsTyping(true);
-
-    const queryLower = query.toLowerCase();
-
-    // Check if the input is very short/vague and missing location
-    const isVague = query.trim().split(/\s+/).length <= 4 && !collectedData.issueText;
-    const hasLocation = queryLower.includes('ward') || queryLower.includes('road') || queryLower.includes('near') || queryLower.includes('street') || queryLower.includes('gps') || collectedData.location;
-
-    if (isVague && !hasLocation) {
-      setTimeout(() => {
-        setCollectedData(prev => ({ ...prev, issueText: query }));
-        const aiMsg = {
-          id: Date.now() + 1,
-          sender: 'ai',
-          text: `I understand: "${query}". To ensure rapid dispatch to the correct field crew, **where is this located?** You can type an address/landmark or click "Share Current Location" below.`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        setMessages(prev => [...prev, aiMsg]);
-        setIsTyping(false);
-      }, 700);
-      return;
-    }
-
-    // Process submission
     try {
-      const fullText = collectedData.issueText ? `${collectedData.issueText}. Location details: ${query}` : query;
       const result = await submitNewComplaint({
-        complaintText: fullText,
-        locationText: collectedData.location || (queryLower.includes('on') || queryLower.includes('in') || queryLower.includes('near') ? '' : ''),
-        latitude: collectedData.coords?.lat,
-        longitude: collectedData.coords?.lon,
+        complaintText: issueText,
+        locationText: locationText || '',
+        latitude: coords?.lat,
+        longitude: coords?.lon,
+        image: imageFile,
         sourceChannel: 'chat',
         citizenName: 'Chat Citizen',
       });
@@ -138,12 +248,13 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
                     `• **Department**: **${result.department}**\n` +
                     `• **Prioritized Risk Score**: **${result.risk_score}/100 (${result.priority} priority)**\n` +
                     `• **SLA Target**: **${result.sla_hours} hours**\n\n` +
-                    `Your message has been linked as a **supporting report**, accelerating the dispatch priority for the response crew!`;
+                    `Your grievance ${imageFile ? 'and photo evidence ' : ''}have been linked as a **supporting report**, accelerating dispatch priority for municipal crews!`;
       } else if (result.domain === 'municipal') {
-        replyText = `I have logged and triaged your issue to **${result.department}**.\n\n` +
+        replyText = `I have logged and triaged your grievance to **${result.department}**.\n\n` +
                     `• **Ticket ID**: \`${result.complaint_id}\`\n` +
                     `• **Safety Risk Score**: **${result.risk_score}/100 (${result.priority} priority)**\n` +
                     `• **Committed SLA**: **${result.sla_hours} hours**\n\n` +
+                    (imageFile ? `• **Visual Evidence Attached**: 1 Photo processed.\n\n` : '') +
                     `Your official tracking reference card is ready below.`;
       } else if (result.domain === 'emergency') {
         replyText = `⚠️ **URGENT SAFETY ROUTING:** This appears to be an immediate emergency. CivicResolve has routed this to **${result.external_service_name || 'ERSS 112'}**.`;
@@ -160,7 +271,16 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
       };
 
       setMessages(prev => [...prev, aiMsg]);
-      setCollectedData({ issueText: '', location: '', coords: null });
+      setCollectedData({
+        issueText: '',
+        location: '',
+        coords: null,
+        awaitingLocation: false,
+        awaitingPhotoDecision: false,
+        awaitingPhotoUpload: false,
+        photoFile: null,
+        photoPreview: null
+      });
     } catch (err) {
       console.error("AI Chat error:", err);
       const errMsg = {
@@ -175,6 +295,204 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
     }
   };
 
+  // Photo handlers
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 8 * 1024 * 1024) {
+      alert("Please upload an image smaller than 8MB.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCollectedData(prev => ({
+        ...prev,
+        photoFile: file,
+        photoPreview: reader.result
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemovePhoto = () => {
+    setCollectedData(prev => ({
+      ...prev,
+      photoFile: null,
+      photoPreview: null
+    }));
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmPhotoSubmit = () => {
+    const { issueText, location, coords, photoFile } = collectedData;
+    executeComplaintSubmission(issueText, location, coords, photoFile);
+  };
+
+  const handleChooseYesPhoto = () => {
+    setCollectedData(prev => ({
+      ...prev,
+      awaitingPhotoDecision: false,
+      awaitingPhotoUpload: true
+    }));
+    const aiMsg = {
+      id: Date.now(),
+      sender: 'ai',
+      text: "Please upload your photo evidence below (JPG, PNG, or WebP up to 8MB), then click Submit.",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setMessages(prev => [...prev, aiMsg]);
+  };
+
+  const handleChooseNoPhoto = () => {
+    const userMsg = {
+      id: Date.now(),
+      sender: 'user',
+      text: "No, continue without photo",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    const aiMsg = {
+      id: Date.now() + 1,
+      sender: 'ai',
+      text: "No problem. We can continue without a photo.",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setMessages(prev => [...prev, userMsg, aiMsg]);
+    const { issueText, location, coords } = collectedData;
+    executeComplaintSubmission(issueText, location, coords, null);
+  };
+
+  const handleSendMessage = async (textToSend) => {
+    const query = textToSend || input;
+    if (!query.trim()) return;
+
+    const userMsg = {
+      id: Date.now(),
+      sender: 'user',
+      text: query,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+
+    // 1. Basic deterministic conversational replies
+    const basicReply = getBasicChatReply(query);
+    if (basicReply) {
+      setIsTyping(true);
+      setTimeout(() => {
+        const aiMsg = {
+          id: Date.now() + 1,
+          sender: 'ai',
+          text: basicReply,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages(prev => [...prev, aiMsg]);
+        setIsTyping(false);
+      }, 350);
+      return;
+    }
+
+    // 2. If awaiting photo decision (Yes/No response)
+    if (collectedData.awaitingPhotoDecision) {
+      if (isAffirmativeResponse(query)) {
+        handleChooseYesPhoto();
+        return;
+      }
+      if (isNegativeResponse(query)) {
+        setIsTyping(true);
+        setTimeout(() => {
+          const aiMsg = {
+            id: Date.now() + 1,
+            sender: 'ai',
+            text: "No problem. We can continue without a photo.",
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          };
+          setMessages(prev => [...prev, aiMsg]);
+          executeComplaintSubmission(collectedData.issueText, collectedData.location, collectedData.coords, null);
+        }, 300);
+        return;
+      }
+    }
+
+    // 3. If awaiting location response
+    if (collectedData.awaitingLocation) {
+      setIsTyping(true);
+      setTimeout(() => {
+        const fullIssueText = collectedData.issueText;
+        const newLocation = query;
+        setCollectedData(prev => ({
+          ...prev,
+          location: newLocation,
+          awaitingLocation: false,
+          awaitingPhotoDecision: true
+        }));
+
+        const aiMsg = {
+          id: Date.now() + 1,
+          sender: 'ai',
+          text: `Got it, location recorded as: **${newLocation}**.\n\nWould you like to attach a photo as evidence?\nYou can upload a photo now, or reply **No** to continue without one.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isPhotoPrompt: true
+        };
+        setMessages(prev => [...prev, aiMsg]);
+        setIsTyping(false);
+      }, 500);
+      return;
+    }
+
+    // 4. Initial Complaint Input
+    const queryLower = query.toLowerCase();
+    const isVague = query.trim().split(/\s+/).length <= 4;
+    const hasLocationWords = queryLower.includes('ward') || queryLower.includes('road') || queryLower.includes('near') || queryLower.includes('street') || queryLower.includes('gps') || queryLower.includes('sector') || queryLower.includes('cross') || queryLower.includes('nagar') || queryLower.includes('junction') || queryLower.includes('pillar') || queryLower.includes('colony');
+
+    if (isVague && !hasLocationWords && !collectedData.location) {
+      setIsTyping(true);
+      setTimeout(() => {
+        setCollectedData(prev => ({
+          ...prev,
+          issueText: query,
+          awaitingLocation: true,
+          awaitingPhotoDecision: false
+        }));
+        const aiMsg = {
+          id: Date.now() + 1,
+          sender: 'ai',
+          text: `I understand: "${query}". To ensure rapid dispatch to the correct field crew, **where is this located?** You can type an address/landmark or click "Share Location" above.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages(prev => [...prev, aiMsg]);
+        setIsTyping(false);
+      }, 600);
+      return;
+    }
+
+    // Has issue and location -> Ask for photo evidence
+    setIsTyping(true);
+    setTimeout(() => {
+      setCollectedData(prev => ({
+        ...prev,
+        issueText: query,
+        location: collectedData.location || '',
+        awaitingLocation: false,
+        awaitingPhotoDecision: true
+      }));
+
+      const aiMsg = {
+        id: Date.now() + 1,
+        sender: 'ai',
+        text: `I have analyzed your report.\n\nWould you like to attach a photo as evidence?\nYou can upload a photo now, or reply **No** to continue without one.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isPhotoPrompt: true
+      };
+      setMessages(prev => [...prev, aiMsg]);
+      setIsTyping(false);
+    }, 600);
+  };
+
   const handleResetChat = () => {
     setMessages([
       {
@@ -185,7 +503,16 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
       }
     ]);
     setExtractedComplaint(null);
-    setCollectedData({ issueText: '', location: '', coords: null });
+    setCollectedData({
+      issueText: '',
+      location: '',
+      coords: null,
+      awaitingLocation: false,
+      awaitingPhotoDecision: false,
+      awaitingPhotoUpload: false,
+      photoFile: null,
+      photoPreview: null
+    });
   };
 
   return (
@@ -201,7 +528,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
             CivicResolve AI Chat
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 font-medium">
-            Conversational intake assistant with confidence-aware clarification and deterministic risk routing.
+            Conversational intake assistant with confidence-aware clarification, photo evidence collection, and deterministic risk routing.
           </p>
         </div>
 
@@ -216,7 +543,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Chat Window */}
-        <div className="lg:col-span-8 bg-white rounded-3xl overflow-hidden flex flex-col h-[640px] border border-slate-200 shadow-md">
+        <div className="lg:col-span-8 bg-white rounded-3xl overflow-hidden flex flex-col h-[660px] border border-slate-200 shadow-md">
           {/* Top Chat Bar */}
           <div className="bg-slate-50 border-b border-slate-200 px-6 py-3.5 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -265,6 +592,28 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
                     }`}>
                       <div className="whitespace-pre-line">{msg.text}</div>
 
+                      {/* Interactive Yes / No Photo buttons attached to photo prompt */}
+                      {msg.isPhotoPrompt && collectedData.awaitingPhotoDecision && (
+                        <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={handleChooseYesPhoto}
+                            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all"
+                          >
+                            <Camera className="w-3.5 h-3.5" />
+                            <span>Yes, Attach Photo</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleChooseNoPhoto}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-300 transition-all"
+                          >
+                            <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+                            <span>No, Continue Without Photo</span>
+                          </button>
+                        </div>
+                      )}
+
                       {/* Attached Ticket Card if present */}
                       {msg.complaintData && (
                         <div className="mt-3 pt-3 border-t border-slate-200 space-y-2.5">
@@ -310,6 +659,72 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
               );
             })}
 
+            {/* In-Chat Photo Upload Card (when user chose YES) */}
+            {collectedData.awaitingPhotoUpload && (
+              <div className="p-4 bg-white border-2 border-red-200 rounded-2xl shadow-md space-y-3 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#162044] flex items-center gap-1.5">
+                    <Camera className="w-4 h-4 text-red-600" />
+                    <span>Attach Photo Evidence</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">Max 8MB (JPG, PNG, WebP)</span>
+                </div>
+
+                {collectedData.photoPreview ? (
+                  <div className="space-y-3">
+                    <div className="relative rounded-xl overflow-hidden border border-slate-300 h-36 bg-slate-100">
+                      <img src={collectedData.photoPreview} alt="Evidence preview" className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={handleRemovePhoto}
+                        className="absolute top-2 right-2 p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-sm"
+                        title="Remove photo"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="text-[11px] text-slate-600 font-mono truncate">
+                      📎 {collectedData.photoFile?.name} ({(collectedData.photoFile?.size / 1024).toFixed(1)} KB)
+                    </div>
+                  </div>
+                ) : (
+                  <label className="border-2 border-dashed border-slate-300 hover:border-red-500 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer bg-slate-50 hover:bg-slate-100 transition-all">
+                    <Upload className="w-6 h-6 text-slate-400 mb-1" />
+                    <span className="text-xs font-bold text-slate-700">Click to choose image file</span>
+                    <span className="text-[10px] text-slate-500">JPG, PNG, WebP supported</span>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={handlePhotoSelect}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleConfirmPhotoSubmit}
+                    className="flex-1 py-2 bg-[#e53935] hover:bg-[#d32f2f] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{collectedData.photoFile ? 'Submit Grievance with Photo' : 'Submit Without Photo'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollectedData(prev => ({ ...prev, awaitingPhotoUpload: false }));
+                      executeComplaintSubmission(collectedData.issueText, collectedData.location, collectedData.coords, null);
+                    }}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold border border-slate-300 transition-all"
+                  >
+                    Skip Photo
+                  </button>
+                </div>
+              </div>
+            )}
+
             {isTyping && (
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-xl bg-red-50 text-red-600 border border-red-200 flex items-center justify-center shrink-0">
@@ -346,7 +761,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Describe your issue or ask a civic question..."
+              placeholder="Describe your issue, reply Yes/No, or ask a question..."
               className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-red-500 focus:bg-white transition-all shadow-inner"
             />
 
@@ -431,7 +846,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
               <div className="text-center py-8 space-y-2">
                 <Bot className="w-8 h-8 text-slate-400 mx-auto" />
                 <p className="text-xs text-slate-500 font-medium">
-                  Chat conversationally with CivicResolve. Missing details like location are clarified before final dispatch.
+                  Chat conversationally with CivicResolve. Missing details like location and photo evidence are clarified before final dispatch.
                 </p>
               </div>
             )}

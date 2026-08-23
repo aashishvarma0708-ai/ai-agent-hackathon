@@ -5,16 +5,16 @@ import {
   MessageSquareCode, 
   Search, 
   Shield, 
-  Sparkles,
   PhoneCall,
-  RotateCcw,
-  CheckCircle2,
   Layers
 } from 'lucide-react';
 import { useComplaints } from '../context/ComplaintContext';
 
+const CALLBOT_NUMBER = import.meta.env.VITE_CALLBOT_NUMBER?.trim() || '';
+const CALLBOT_TEL = CALLBOT_NUMBER.replace(/[^\d+]/g, '');
+
 export default function Sidebar({ activePage, setActivePage }) {
-  const { complaints, resetToDemo } = useComplaints();
+  const { complaints } = useComplaints();
   const criticalCount = complaints.filter(c => c.priority === 'CRITICAL' && c.status !== 'CLOSED').length;
   const openCount = complaints.filter(c => c.status !== 'CLOSED').length;
 
@@ -93,17 +93,24 @@ export default function Sidebar({ activePage, setActivePage }) {
         </div>
       </div>
 
-      {/* Emergency Helpline Box */}
-      <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-900 space-y-1 text-xs">
-        <div className="flex items-center gap-1.5 font-bold">
-          <PhoneCall className="w-3.5 h-3.5 text-red-600" />
-          <span>Toll-Free Helplines</span>
+      {/* AI Voice Agent Helpline Box */}
+      {CALLBOT_NUMBER && (
+        <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-900 space-y-1.5 text-xs">
+          <div className="flex items-center gap-1.5 font-bold">
+            <PhoneCall className="w-3.5 h-3.5 text-red-600" />
+            <span>CivicResolve AI Voice Agent</span>
+          </div>
+          <p className="text-[10px] text-slate-600 font-medium">
+            Report civic issues using natural speech.
+          </p>
+          <a
+            href={`tel:${CALLBOT_TEL}`}
+            className="inline-block text-xs font-mono font-black text-red-700 hover:text-red-900 underline"
+          >
+            {CALLBOT_NUMBER}
+          </a>
         </div>
-        <div className="text-[11px] text-red-800 font-mono font-semibold pt-0.5 space-y-0.5">
-          <div>Emergency: <strong>112</strong></div>
-          <div>Civic Grievance: <strong>1916</strong></div>
-        </div>
-      </div>
+      )}
     </aside>
   );
 }

@@ -11,11 +11,15 @@ import {
   ChevronRight,
   Building2,
   ShieldCheck,
-  PlusCircle
+  PlusCircle,
+  PhoneCall
 } from 'lucide-react';
 import CivicStatsBanner from '../components/CivicStatsBanner';
 import HotspotMap from '../components/HotspotMap';
 import { useComplaints } from '../context/ComplaintContext';
+
+const CALLBOT_NUMBER = import.meta.env.VITE_CALLBOT_NUMBER?.trim() || '';
+const CALLBOT_TEL = CALLBOT_NUMBER.replace(/[^\d+]/g, '');
 
 export default function Home({ setActivePage, setTrackSearchId }) {
   const [homeSearchInput, setHomeSearchInput] = useState('');
@@ -52,6 +56,41 @@ export default function Home({ setActivePage, setTrackSearchId }) {
             <p className="text-sm sm:text-base text-slate-600 font-medium leading-relaxed max-w-2xl">
               Submit grievances with instant photo upload, AI landmark detection, and zero-hallucination routing to municipal departments.
             </p>
+
+            {/* Voice Callbot reporting section (rendered only if CALLBOT_NUMBER exists) */}
+            {CALLBOT_NUMBER && (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-red-50/90 to-amber-50/70 border border-red-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-start sm:items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#e53935] text-white flex items-center justify-center shrink-0 shadow-md shadow-red-500/20">
+                    <PhoneCall className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <span>Report by Voice Call</span>
+                        <span className="px-1.5 py-0.2 text-[9px] font-mono font-black uppercase tracking-wider bg-red-100 text-red-700 rounded border border-red-200">AI Callbot</span>
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 font-medium">
+                      Call CivicResolve AI and report your civic issue using natural speech.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5 sm:self-center shrink-0">
+                  <span className="text-xs sm:text-sm font-mono font-black text-[#162044] tracking-wider px-2.5 py-1 bg-white/90 rounded-lg border border-slate-200">
+                    {CALLBOT_NUMBER}
+                  </span>
+                  <a
+                    href={`tel:${CALLBOT_TEL}`}
+                    className="px-3.5 py-1.5 rounded-xl bg-[#162044] hover:bg-[#0f1730] text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 hover:scale-105 active:scale-95"
+                  >
+                    <PhoneCall className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Call Now</span>
+                  </a>
+                </div>
+              </div>
+            )}
 
             <div className="pt-2 flex flex-wrap items-center gap-3">
               <button
@@ -423,6 +462,25 @@ export default function Home({ setActivePage, setTrackSearchId }) {
           </div>
         </div>
       </section>
+
+      {/* Floating AI Callbot Action Button (Home Page Only) */}
+      {CALLBOT_NUMBER && (
+        <aside aria-label="Quick voice callbot trigger" className="fixed bottom-5 left-5 z-40">
+          <a
+            href={`tel:${CALLBOT_TEL}`}
+            aria-label="Call CivicResolve AI Voice Agent"
+            title="Call CivicResolve AI Voice Agent"
+            className="flex items-center gap-2.5 px-4 py-3 bg-[#e53935] hover:bg-[#d32f2f] text-white rounded-full shadow-xl shadow-red-600/30 transition-all duration-300 hover:scale-110 hover:-translate-y-1 hover:shadow-2xl hover:shadow-red-600/50 active:scale-95 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2"
+          >
+            <div className="relative flex items-center justify-center shrink-0">
+              <PhoneCall className="w-4 h-4 text-white animate-pulse" />
+            </div>
+            <span className="text-xs font-black font-sans tracking-wide select-none whitespace-nowrap">
+              Call CivicResolve AI
+            </span>
+          </a>
+        </aside>
+      )}
     </div>
   );
 }

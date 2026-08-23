@@ -20,7 +20,8 @@ import {
   X,
   Users,
   Image as ImageIcon,
-  Flame
+  Flame,
+  ImageOff
 } from 'lucide-react';
 import { useComplaints } from '../context/ComplaintContext';
 import PriorityBadge from '../components/PriorityBadge';
@@ -356,35 +357,56 @@ export default function TrackComplaint({ initialSearchId = '', setActivePage }) 
                     <Sparkles className="w-4 h-4 text-red-600" />
                     <span>Multimodal Resolution Verification Evidence</span>
                   </span>
-                  {complaint.ai_verification_result && (
-                    <span className="text-[10px] font-mono bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded border border-emerald-200">
-                      {Math.round((complaint.ai_verification_result.confidence || 0.94) * 100)}% Confidence
-                    </span>
-                  )}
+                  {(() => {
+                    const conf = complaint.ai_verification_result?.confidence;
+                    if (typeof conf === 'number') {
+                      const pct = conf <= 1 ? Math.round(conf * 100) : Math.round(conf);
+                      return (
+                        <span className="text-[10px] font-mono bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded border border-emerald-200">
+                          {pct}% Confidence
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Before Photo */}
                   <div className="space-y-1.5">
                     <span className="text-[11px] font-bold text-slate-700">1. Initial Citizen Evidence (Before)</span>
-                    <div className="rounded-2xl overflow-hidden border border-slate-300 h-44 bg-slate-100 shadow-sm">
-                      <img 
-                        src={complaint.initial_image_url || "https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&w=600&q=80"} 
-                        alt="Before evidence" 
-                        className="w-full h-full object-cover" 
-                      />
+                    <div className="rounded-2xl overflow-hidden border border-slate-300 h-44 bg-slate-100 flex items-center justify-center shadow-sm">
+                      {complaint.initial_image_url ? (
+                        <img 
+                          src={complaint.initial_image_url} 
+                          alt="Before evidence" 
+                          className="w-full h-full object-cover" 
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-center p-4 text-slate-400 space-y-1">
+                          <ImageOff className="w-6 h-6 text-slate-400" />
+                          <span className="text-[11px] font-medium text-slate-500">No citizen evidence photo was uploaded.</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
                   {/* After Photo */}
                   <div className="space-y-1.5">
                     <span className="text-[11px] font-bold text-slate-700">2. Field Authority Proof (After Repair)</span>
-                    <div className="rounded-2xl overflow-hidden border border-slate-300 h-44 bg-slate-100 shadow-sm">
-                      <img 
-                        src={complaint.resolution_image_url || "https://images.unsplash.com/photo-1590402494682-cd3fb53b1f70?auto=format&fit=crop&w=600&q=80"} 
-                        alt="After evidence" 
-                        className="w-full h-full object-cover" 
-                      />
+                    <div className="rounded-2xl overflow-hidden border border-slate-300 h-44 bg-slate-100 flex items-center justify-center shadow-sm">
+                      {complaint.resolution_image_url ? (
+                        <img 
+                          src={complaint.resolution_image_url} 
+                          alt="After evidence" 
+                          className="w-full h-full object-cover" 
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-center p-4 text-slate-400 space-y-1">
+                          <ImageOff className="w-6 h-6 text-slate-400" />
+                          <span className="text-[11px] font-medium text-slate-500">No resolution evidence photo has been submitted.</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -393,10 +415,12 @@ export default function TrackComplaint({ initialSearchId = '', setActivePage }) 
                   <div className="p-3 rounded-xl bg-white border border-slate-200 text-xs text-slate-800 space-y-1 shadow-sm">
                     <div className="flex items-center gap-1.5 font-bold text-emerald-700">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>AI Verification Result: Issue Appears Resolved</span>
+                      <span>
+                        AI Verification Result: {complaint.ai_verification_result.appears_resolved ? 'Issue Appears Resolved' : (complaint.ai_verification_result.requires_human_review ? 'Requires Human Review' : 'Resolution Not Verified')}
+                      </span>
                     </div>
                     <p className="text-[11px] text-slate-600 font-medium">
-                      {complaint.ai_verification_result.summary || "Visual comparison indicates the defect has been repaired and leveled."}
+                      {complaint.ai_verification_result.summary || "Visual comparison recorded by automated resolution pipeline."}
                     </p>
                   </div>
                 )}

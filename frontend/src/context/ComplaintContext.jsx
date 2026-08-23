@@ -27,7 +27,7 @@ export function ComplaintProvider({ children }) {
     } catch (e) {
       console.warn("Failed to load complaints from storage:", e);
     }
-    return INITIAL_COMPLAINTS;
+    return [];
   });
 
   const [analytics, setAnalytics] = useState(null);
@@ -39,7 +39,7 @@ export function ComplaintProvider({ children }) {
     try {
       setLoading(true);
       const data = await getAdminComplaints();
-      if (Array.isArray(data) && data.length > 0) {
+      if (Array.isArray(data)) {
         setComplaints(data);
         setBackendOnline(true);
       }
@@ -49,7 +49,7 @@ export function ComplaintProvider({ children }) {
         setAnalytics(anData);
       }
     } catch (e) {
-      console.warn("Backend API not reachable yet, using client cache/mock data:", e.message);
+      console.warn("Backend API not reachable:", e.message);
       setBackendOnline(false);
     } finally {
       setLoading(false);

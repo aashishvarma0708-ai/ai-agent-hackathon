@@ -38,59 +38,6 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
   const [errorMessage, setErrorMessage] = useState('');
   const [resultComplaint, setResultComplaint] = useState(null);
 
-  const presets = [
-    {
-      label: "🚧 Pothole outside School (Critical)",
-      text: "Massive pothole opened up near St. Mary's School gate. Two bikes skidded this morning during drop-off hours.",
-      loc: "School Road, Ward 14, Central Zone",
-      lat: 16.3065,
-      lon: 80.4362,
-      img: "https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&w=600&q=80"
-    },
-    {
-      label: "💧 Main Water Pipe Rupture (Critical)",
-      text: "Main drinking water pipeline ruptured at 4th cross junction. Water is flooding the road and 80 homes have zero water.",
-      loc: "4th Cross, Green Park Extension, Ward 09",
-      lat: 16.3120,
-      lon: 80.4410,
-      img: "https://images.unsplash.com/photo-1541888946425-d0fbb18086f6?auto=format&fit=crop&w=600&q=80"
-    },
-    {
-      label: "🗑️ 6-Day Garbage Pileup (High)",
-      text: "Garbage collection truck has not visited our street for 6 days. Stray animals are scattering waste and bad odor.",
-      loc: "Sector 4B, Behind Community Center",
-      lat: 16.3185,
-      lon: 80.4520,
-      img: "https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&w=600&q=80"
-    },
-    {
-      label: "⚖️ Online Seller Fraud (Consumer Guardrail)",
-      text: "Ordered a medical device from an e-commerce vendor, received a broken duplicate item. Merchant refused refund and blocked my phone.",
-      loc: "Online merchant / Residential",
-      lat: null,
-      lon: null,
-      img: null
-    },
-    {
-      label: "🚨 Fire Sparking from Transformer (Emergency)",
-      text: "Electrical transformer sparking intensely with flames and black smoke near residential colony!",
-      loc: "Street 8, Block C, Ashok Nagar",
-      lat: 16.2910,
-      lon: 80.4310,
-      img: null
-    }
-  ];
-
-  const handleApplyPreset = (preset) => {
-    setComplaintText(preset.text);
-    setLocationText(preset.loc);
-    setCoords({ lat: preset.lat, lon: preset.lon });
-    setImagePreview(preset.img);
-    setImageFile(null);
-    setResultComplaint(null);
-    setErrorMessage('');
-  };
-
   const handleGetCurrentLocation = () => {
     if (!navigator.geolocation) {
       setLocationText("Ward 14 (Central Zone GPS Fallback)");
@@ -172,29 +119,6 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
         <p className="text-sm text-slate-600 max-w-2xl font-medium">
           The AI engine analyzes your description and evidence in real time, determines jurisdiction, calculates public safety risk, and routes directly to the accountable department.
         </p>
-      </div>
-
-      {/* Demo Preset Chips */}
-      <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-slate-700 font-mono flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-red-600" />
-            Quick Demo Scenarios (Click to auto-populate form):
-          </span>
-          <span className="text-[11px] text-slate-500 font-mono">Expo Ready</span>
-        </div>
-        <div className="flex flex-wrap gap-2 pt-1">
-          {presets.map((p, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => handleApplyPreset(p)}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 hover:border-red-400 hover:text-red-700 transition-all text-left"
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -447,7 +371,7 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
                 Live AI Triage & Risk Preview
               </h3>
               <p className="text-xs text-slate-600 leading-relaxed max-w-sm mx-auto font-medium">
-                Fill out the report or click any quick demo scenario above. CivicResolve will calculate real-time safety scores, verify domain separation, and output structured agent traces.
+                Fill out the grievance details and attach evidence. CivicResolve will calculate real-time safety scores, verify domain separation, and output structured agent traces.
               </p>
               <div className="pt-2 grid grid-cols-2 gap-2 text-left font-mono text-[11px]">
                 <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 font-semibold">
