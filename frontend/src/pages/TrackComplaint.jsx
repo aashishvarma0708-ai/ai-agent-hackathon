@@ -199,23 +199,7 @@ export default function TrackComplaint({ initialSearchId = '', setActivePage }) 
           </button>
         </form>
 
-        {/* Quick Sample ID Chips */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-          <span className="text-slate-500 font-mono font-semibold">Sample Tickets:</span>
-          {complaints.slice(0, 5).map((c) => (
-            <button
-              key={c.complaint_id}
-              onClick={() => handleSelectSample(c.complaint_id)}
-              className={`px-2.5 py-1 rounded-lg font-mono text-[11px] transition-all ${
-                complaint?.complaint_id === c.complaint_id
-                  ? 'bg-red-50 text-red-700 border border-red-300 font-black'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
-              }`}
-            >
-              {c.complaint_id} ({c.category || c.service_type})
-            </button>
-          ))}
-        </div>
+
       </div>
 
       {notFound && (
