@@ -384,6 +384,12 @@ async def media_stream(websocket: WebSocket):
     utterance_parts = []
     fast_turn_handled = False
 
+    # Deepgram occasionally sends good interim text but fails
+    # to emit a final boundary on telephone audio. This task
+    # forces finalization after a short period without transcript
+    # updates so the caller is never left waiting indefinitely.
+    interim_finalize_task = None
+
     bot_playback_pending = False
     current_mark_name = None
     tts_active = False
@@ -944,6 +950,67 @@ async def media_stream(websocket: WebSocket):
         )
 
     # --------------------------------------------------------
+    # STT FINALIZATION WATCHDOG
+    # --------------------------------------------------------
+
+    async def force_stt_finalize_after_pause():
+        """
+        Deepgram normally emits a final result automatically.
+        On some phone calls it can keep returning only interim
+        transcripts. If no transcript update arrives for a short
+        time, force the current utterance to finalize.
+        """
+        try:
+            await asyncio.sleep(1.6)
+
+            if call_stopping:
+                return
+
+            print(
+                "⏱️ STT pause detected — forcing transcript finalize",
+                flush=True,
+            )
+
+            await stt.finalize()
+
+        except asyncio.CancelledError:
+            pass
+
+        except Exception as exc:
+            print(
+                f"⚠️ STT forced-finalize error: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+
+    def reset_stt_finalize_watchdog():
+        nonlocal interim_finalize_task
+
+        if (
+            interim_finalize_task is not None
+            and not interim_finalize_task.done()
+        ):
+            interim_finalize_task.cancel()
+
+        interim_finalize_task = asyncio.create_task(
+            force_stt_finalize_after_pause()
+        )
+
+
+    def cancel_stt_finalize_watchdog():
+        nonlocal interim_finalize_task
+
+        if (
+            interim_finalize_task is not None
+            and not interim_finalize_task.done()
+        ):
+            interim_finalize_task.cancel()
+
+        interim_finalize_task = None
+
+
+    # --------------------------------------------------------
     # DEEPGRAM STT LISTENER
     # --------------------------------------------------------
 
@@ -974,6 +1041,8 @@ async def media_stream(websocket: WebSocket):
                 continue
 
             if result_type == "utterance_end":
+                cancel_stt_finalize_watchdog()
+
                 if utterance_parts and not fast_turn_handled:
                     full_utterance = " ".join(
                         utterance_parts
@@ -1034,7 +1103,15 @@ async def media_stream(websocket: WebSocket):
 
             if not is_final:
                 print(f"… STT: {transcript}")
+
+                # Every new interim transcript restarts the timer.
+                # If the caller stops speaking and Deepgram fails
+                # to send a final boundary, finalize it ourselves.
+                reset_stt_finalize_watchdog()
+
                 continue
+
+            cancel_stt_finalize_watchdog()
 
             print(f"📝 STT FINAL: {transcript}")
             utterance_parts.append(transcript)
@@ -1214,6 +1291,19 @@ async def media_stream(websocket: WebSocket):
 
     finally:
         call_stopping = True
+
+        if (
+            interim_finalize_task is not None
+            and not interim_finalize_task.done()
+        ):
+            interim_finalize_task.cancel()
+
+            try:
+                await interim_finalize_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
 
         if reply_task is not None and not reply_task.done():
             reply_task.cancel()
