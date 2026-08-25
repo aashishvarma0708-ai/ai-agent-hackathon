@@ -177,6 +177,31 @@ SHORT_ANSWERS = {
     "thats it",
     "yes there is",
     "yes it is",
+    "sure",
+    "okay",
+    "ok",
+    "fine",
+    "alright",
+    "all right",
+    "sounds good",
+    "yeah sure",
+    "yeah fine",
+    "yeah okay",
+    "yeah ok",
+    "yes sure",
+    "yes fine",
+    "yes okay",
+    "yes ok",
+    "okay sure",
+    "ok sure",
+    "sure yeah",
+    "go ahead",
+    "go for it",
+    "do it",
+    "please do",
+    "please do it",
+    "absolutely",
+    "of course",
     "no",
     "nope",
     "false",
@@ -789,26 +814,22 @@ async def media_stream(websocket: WebSocket):
                             state.complaint_id
                         )
 
-                        public_base = os.getenv(
-                            "PUBLIC_APP_URL",
-                            "",
-                        ).strip()
+                        public_host = get_public_host()
 
-                        if not public_base:
-                            public_host = get_public_host()
-
-                            if not public_host:
-                                raise RuntimeError(
-                                    "PUBLIC_HOST is not configured"
-                                )
-
-                            public_base = (
-                                f"https://{public_host}"
+                        if not public_host:
+                            raise RuntimeError(
+                                "PUBLIC_HOST is not configured"
                             )
 
                         evidence_url = (
-                            f"{public_base.rstrip('/')}"
+                            f"https://{public_host}"
                             f"/evidence/{token}"
+                        )
+
+                        print(
+                            f"🔗 Evidence links use: "
+                            f"https://{public_host}/evidence/<token>",
+                            flush=True,
                         )
 
                         sms = CivicResolveSMS()
