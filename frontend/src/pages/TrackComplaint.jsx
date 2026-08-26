@@ -24,6 +24,7 @@ import {
   ImageOff
 } from 'lucide-react';
 import { useComplaints } from '../context/ComplaintContext';
+import { getPublicTracking } from '../api/civicresolve';
 import PriorityBadge from '../components/PriorityBadge';
 import StatusBadge from '../components/StatusBadge';
 import RiskGauge from '../components/RiskGauge';
@@ -43,11 +44,18 @@ export default function TrackComplaint({ initialSearchId = '', setActivePage }) 
 
   const loadTicket = async (idToFind) => {
     if (!idToFind || !idToFind.trim()) return;
+    const term = idToFind.trim();
     setLoading(true);
     setNotFound(false);
 
     try {
-      const match = await getComplaint(idToFind.trim());
+      let match = await getComplaint(term);
+      if (!match) {
+        const publicData = await getPublicTracking(term);
+        if (publicData) {
+          match = publicData;
+        }
+      }
       if (match) {
         setComplaint(match);
         setNotFound(false);

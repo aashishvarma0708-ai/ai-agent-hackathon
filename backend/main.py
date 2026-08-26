@@ -8,9 +8,10 @@ import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Request, Query
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Request, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import httpx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("civicresolve.backend")
@@ -23,6 +24,8 @@ if str(ROOT) not in sys.path:
 from core.db import (
     init_db, 
     get_complaint, 
+    get_complaint_by_tracking_token,
+    update_notification_status,
     list_complaints, 
     update_status, 
     get_history,
@@ -45,6 +48,34 @@ app = FastAPI(
     description="FastAPI Backend for CivicResolve AI Civic Triage and Routing Engine",
     version="0.2.0",
 )
+
+NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:8001").rstrip("/")
+NOTIFICATION_SHARED_SECRET = os.getenv("NOTIFICATION_SHARED_SECRET", "cr_notify_secret_2026").strip()
+
+
+async def trigger_citizen_notification(payload: dict):
+    """
+    Asynchronously invokes the Callbot notification service.
+    Runs in background and will never cause a complaint failure.
+    """
+    if not payload.get("phone_number") or payload.get("notification_preference") == "none":
+        return
+
+    url = f"{NOTIFICATION_SERVICE_URL}/internal/notify"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Notification-Secret": NOTIFICATION_SHARED_SECRET,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, json=payload, headers=headers)
+            if res.status_code == 200:
+                logger.info(f"Notification triggered successfully for complaint {payload.get('complaint_id')}")
+            else:
+                logger.warning(f"Notification service returned HTTP {res.status_code} for {payload.get('complaint_id')}")
+    except Exception as exc:
+        logger.warning(f"Could not reach notification service: {exc} (Complaint {payload.get('complaint_id')} remains safely registered)")
 
 # Configure CORS
 origins = [
@@ -167,6 +198,7 @@ def health_check():
 @app.post("/api/complaints")
 async def create_complaint(
     request: Request,
+    background_tasks: BackgroundTasks,
     complaint_text: Optional[str] = Form(None),
     location_text: Optional[str] = Form(""),
     latitude: Optional[float] = Form(None),
@@ -174,15 +206,22 @@ async def create_complaint(
     citizen_name: Optional[str] = Form(""),
     source_channel: Optional[str] = Form("web"),
     language_hint: Optional[str] = Form(""),
+    citizen_phone: Optional[str] = Form(None),
+    notification_preference: Optional[str] = Form("none"),
+    whatsapp_opt_in: Optional[bool] = Form(False),
     image: Optional[UploadFile] = File(None),
 ):
     """
     Accepts both multipart/form-data (with optional image file) and application/json.
-    Coordinates AI parsing, location normalization, duplicate detection, risk scoring, and SLA.
+    Coordinates AI parsing, location normalization, duplicate detection, risk scoring, notification dispatch, and SLA.
     """
     content_type = request.headers.get("content-type", "")
     image_bytes = None
     image_mime = "image/jpeg"
+
+    phone = citizen_phone
+    notif_pref = notification_preference or "none"
+    wa_opt = whatsapp_opt_in or False
 
     if "application/json" in content_type:
         try:
@@ -194,6 +233,9 @@ async def create_complaint(
             name = body.get("citizen_name", "")
             channel = body.get("source_channel", "web")
             lang = body.get("language_hint", "")
+            phone = body.get("citizen_phone", None)
+            notif_pref = body.get("notification_preference", "none")
+            wa_opt = body.get("whatsapp_opt_in", False)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {e}")
     else:
@@ -215,23 +257,89 @@ async def create_complaint(
             detail="Either complaint_text or an evidence image must be provided.",
         )
 
-    result = process_complaint(
-        complaint_text=c_text.strip() or "Citizen submitted image evidence without text.",
-        location_text=l_text.strip(),
-        latitude=lat,
-        longitude=lon,
-        source_channel=channel.strip() or "web",
-        citizen_name=name.strip(),
-        image_bytes=image_bytes,
-        image_mime=image_mime,
-        language_hint=lang.strip(),
-    )
+    try:
+        result = process_complaint(
+            complaint_text=c_text.strip() or "Citizen submitted image evidence without text.",
+            location_text=l_text.strip(),
+            latitude=lat,
+            longitude=lon,
+            source_channel=channel.strip() or "web",
+            citizen_name=name.strip(),
+            image_bytes=image_bytes,
+            image_mime=image_mime,
+            language_hint=lang.strip(),
+            citizen_phone=phone,
+            notification_preference=notif_pref,
+            whatsapp_opt_in=wa_opt,
+        )
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
 
     # Attach live SLA status
     sla_info = evaluate_sla_state(result)
     result["sla_info"] = sla_info
 
+    # Asynchronous background notification dispatch if phone & preference provided
+    if result.get("citizen_phone") and result.get("notification_preference") != "none":
+        notify_payload = {
+            "complaint_id": result.get("complaint_id"),
+            "phone_number": result.get("citizen_phone"),
+            "notification_preference": result.get("notification_preference", "none"),
+            "whatsapp_opt_in": bool(result.get("whatsapp_opt_in")),
+            "tracking_token": result.get("tracking_token"),
+            "evidence_url": None,
+        }
+        background_tasks.add_task(trigger_citizen_notification, notify_payload)
+
     return result
+
+
+@app.get("/api/public/track/{tracking_token}")
+def public_track_complaint(tracking_token: str):
+    """
+    Safe public complaint tracking endpoint.
+    Authorized solely by possession of the cryptographically unguessable tracking token.
+    Exposes strictly citizen-safe fields without private phone numbers or internal traces.
+    """
+    token_clean = (tracking_token or "").strip()
+    if not token_clean:
+        raise HTTPException(status_code=404, detail="Tracking token not found.")
+
+    complaint = get_complaint_by_tracking_token(token_clean)
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Tracking token not found or invalid.")
+
+    citizen_conf = None
+    if isinstance(complaint.get("citizen_confirmation"), str):
+        try:
+            citizen_conf = json.loads(complaint["citizen_confirmation"])
+        except Exception:
+            citizen_conf = None
+    elif isinstance(complaint.get("citizen_confirmation"), dict):
+        citizen_conf = complaint.get("citizen_confirmation")
+
+    return {
+        "complaint_id": complaint["complaint_id"],
+        "summary": complaint.get("summary", ""),
+        "category": complaint.get("category", "unknown"),
+        "subcategory": complaint.get("subcategory", ""),
+        "location_text": complaint.get("location_text", ""),
+        "jurisdiction": complaint.get("jurisdiction", ""),
+        "priority": complaint.get("priority", "LOW"),
+        "department": complaint.get("department", ""),
+        "status": complaint.get("status", "NEW"),
+        "created_at": complaint.get("created_at"),
+        "updated_at": complaint.get("updated_at"),
+        "report_count": complaint.get("report_count", 1) or 1,
+        "resolution_summary": complaint.get("resolution_summary", ""),
+        "citizen_confirmation": citizen_conf,
+        "initial_image_url": complaint.get("initial_image_url", ""),
+        "resolution_image_url": complaint.get("resolution_image_url", ""),
+        "sla_hours": complaint.get("sla_hours", 24),
+        "sla_deadline": complaint.get("sla_deadline"),
+        "external_service_name": complaint.get("external_service_name", ""),
+        "external_service_url": complaint.get("external_service_url", ""),
+    }
 
 
 @app.get("/api/complaints/{complaint_id}")

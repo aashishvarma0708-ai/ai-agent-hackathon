@@ -20,19 +20,24 @@ def mask_phone(number: str) -> str:
 
 def normalize_phone(number: str) -> str:
     """
-    Require international E.164-style numbers.
+    Require international E.164-style numbers or Indian 10-digit numbers.
 
     Example:
-        +919876543210
+        +919876543210 or 9876543210 -> +919876543210
     """
-
     number = (number or "").strip()
-    number = number.replace(" ", "")
-    number = number.replace("-", "")
-    number = number.replace("(", "")
-    number = number.replace(")", "")
+    number = re.sub(r"[\s\-\(\)\.]", "", number)
 
-    if not re.fullmatch(r"\+[1-9]\d{7,14}", number):
+    if re.fullmatch(r"[6-9]\d{9}", number):
+        return f"+91{number}"
+
+    if re.fullmatch(r"0[6-9]\d{9}", number):
+        return f"+91{number[1:]}"
+
+    if re.fullmatch(r"91[6-9]\d{9}", number):
+        return f"+{number}"
+
+    if not re.fullmatch(r"\+[1-9]\d{6,14}", number):
         raise SMSError(
             "Recipient phone number must use international "
             "format, for example +919876543210."
@@ -135,6 +140,29 @@ class CivicResolveSMS:
             ),
             "to": recipient,
         }
+
+
+    def send_complaint_links(
+        self,
+        to_number: str,
+        complaint_id: str,
+        evidence_url: Optional[str] = None,
+        tracking_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        cid = (complaint_id or "").strip()
+        if not cid:
+            raise SMSError("Complaint ID is required.")
+
+        body_parts = [f"CivicResolve\n\nComplaint {cid} has been registered."]
+
+        if evidence_url and str(evidence_url).strip():
+            body_parts.append(f"\nAdd optional evidence:\n{str(evidence_url).strip()}")
+
+        if tracking_url and str(tracking_url).strip():
+            body_parts.append(f"\nTrack your complaint:\n{str(tracking_url).strip()}")
+
+        body = "\n".join(body_parts)
+        return self.send_message(to_number, body)
 
 
     def send_evidence_link(

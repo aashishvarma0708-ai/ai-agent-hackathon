@@ -86,6 +86,9 @@ export function ComplaintProvider({ children }) {
     citizenName = '',
     sourceChannel = 'web',
     languageHint = '',
+    citizenPhone = null,
+    notificationPreference = 'none',
+    whatsappOptIn = false,
     image = null,
   }) => {
     try {
@@ -98,6 +101,9 @@ export function ComplaintProvider({ children }) {
         citizen_name: citizenName,
         source_channel: sourceChannel,
         language_hint: languageHint,
+        citizen_phone: citizenPhone,
+        notification_preference: notificationPreference,
+        whatsapp_opt_in: whatsappOptIn,
         image: image,
       });
 

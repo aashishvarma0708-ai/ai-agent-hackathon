@@ -50,6 +50,13 @@ def init_db():
             resolution_summary TEXT,
             ai_verification_result TEXT,
             citizen_confirmation TEXT,
+            citizen_phone TEXT,
+            notification_preference TEXT DEFAULT 'none',
+            whatsapp_opt_in INTEGER DEFAULT 0,
+            tracking_token TEXT,
+            sms_last_status TEXT,
+            whatsapp_last_status TEXT,
+            last_notification_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             agent_trace TEXT
@@ -124,11 +131,25 @@ def init_db():
             "resolution_summary": "TEXT",
             "ai_verification_result": "TEXT",
             "citizen_confirmation": "TEXT",
+            "citizen_phone": "TEXT",
+            "notification_preference": "TEXT DEFAULT 'none'",
+            "whatsapp_opt_in": "INTEGER DEFAULT 0",
+            "tracking_token": "TEXT",
+            "sms_last_status": "TEXT",
+            "whatsapp_last_status": "TEXT",
+            "last_notification_at": "TEXT",
         }
 
         for col, col_type in new_cols.items():
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE complaints ADD COLUMN {col} {col_type}")
+
+        # Unique index on tracking_token
+        conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_complaints_tracking_token 
+        ON complaints(tracking_token) 
+        WHERE tracking_token IS NOT NULL
+        """)
 
         conn.commit()
 
@@ -153,6 +174,8 @@ def save_complaint(c: dict):
             status, external_service_name, external_service_url,
             initial_image_url, resolution_image_url, resolution_summary,
             ai_verification_result, citizen_confirmation,
+            citizen_phone, notification_preference, whatsapp_opt_in,
+            tracking_token, sms_last_status, whatsapp_last_status, last_notification_at,
             created_at, updated_at, agent_trace
         ) VALUES (
             ?, ?, ?, ?,
@@ -164,6 +187,8 @@ def save_complaint(c: dict):
             ?, ?, ?,
             ?, ?, ?,
             ?, ?,
+            ?, ?, ?,
+            ?, ?, ?, ?,
             ?, ?, ?
         )
         """, (
@@ -188,6 +213,13 @@ def save_complaint(c: dict):
             c.get("resolution_summary", ""),
             json.dumps(c.get("ai_verification_result")) if c.get("ai_verification_result") else None,
             json.dumps(c.get("citizen_confirmation")) if c.get("citizen_confirmation") else None,
+            c.get("citizen_phone"),
+            c.get("notification_preference", "none"),
+            1 if c.get("whatsapp_opt_in") else 0,
+            c.get("tracking_token"),
+            c.get("sms_last_status"),
+            c.get("whatsapp_last_status"),
+            c.get("last_notification_at"),
             c.get("created_at", now), now,
             json.dumps(c.get("agent_trace", []), ensure_ascii=False),
         ))
@@ -208,6 +240,47 @@ def get_complaint(complaint_id: str) -> Optional[Dict[str, Any]]:
             (complaint_id.strip().upper(),)
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_complaint_by_tracking_token(tracking_token: str) -> Optional[Dict[str, Any]]:
+    if not tracking_token or not tracking_token.strip():
+        return None
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM complaints WHERE tracking_token = ?",
+            (tracking_token.strip(),)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_notification_status(
+    complaint_id: str,
+    sms_status: Optional[str] = None,
+    whatsapp_status: Optional[str] = None
+) -> bool:
+    cid = (complaint_id or "").strip().upper()
+    if not cid:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    updates = ["updated_at = ?"]
+    values = [now]
+    if sms_status is not None:
+        updates.append("sms_last_status = ?")
+        values.append(sms_status)
+    if whatsapp_status is not None:
+        updates.append("whatsapp_last_status = ?")
+        values.append(whatsapp_status)
+    updates.append("last_notification_at = ?")
+    values.append(now)
+    values.append(cid)
+
+    with _conn() as conn:
+        cursor = conn.execute(
+            f"UPDATE complaints SET {', '.join(updates)} WHERE complaint_id = ?",
+            values
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def list_complaints(limit: int = 200) -> List[Dict[str, Any]]:

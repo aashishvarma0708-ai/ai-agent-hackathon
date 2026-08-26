@@ -16,7 +16,11 @@ import {
   Image as ImageIcon,
   X,
   Camera,
-  Check
+  Check,
+  Smartphone,
+  Phone,
+  MessageSquare,
+  Copy
 } from 'lucide-react';
 import { useComplaints } from '../context/ComplaintContext';
 import PriorityBadge from '../components/PriorityBadge';
@@ -174,7 +178,11 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
     awaitingPhotoDecision: false,
     awaitingPhotoUpload: false,
     photoFile: null,
-    photoPreview: null
+    photoPreview: null,
+    awaitingPhoneDecision: false,
+    citizenPhone: '',
+    notificationPref: 'sms',
+    whatsappOptIn: false,
   });
 
   const chatContainerRef = useRef(null);
@@ -201,7 +209,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
         behavior: 'smooth'
       });
     }
-  }, [messages, isTyping, collectedData.awaitingPhotoUpload, collectedData.awaitingPhotoDecision]);
+  }, [messages, isTyping, collectedData.awaitingPhotoUpload, collectedData.awaitingPhotoDecision, collectedData.awaitingPhoneDecision]);
 
   const handleShareLocation = () => {
     if (!navigator.geolocation) {
@@ -222,8 +230,35 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
     );
   };
 
+  // Step into tracking notification decision before final submission
+  const proceedToPhoneDecision = () => {
+    setCollectedData(prev => ({
+      ...prev,
+      awaitingPhotoDecision: false,
+      awaitingPhotoUpload: false,
+      awaitingPhoneDecision: true,
+    }));
+
+    const aiMsg = {
+      id: Date.now() + 1,
+      sender: 'ai',
+      text: "Would you like to receive SMS or WhatsApp tracking updates for this complaint?\nYou can provide your mobile number or skip.",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      isPhonePrompt: true,
+    };
+    setMessages(prev => [...prev, aiMsg]);
+  };
+
   // Canonical submission function
-  const executeComplaintSubmission = async (issueText, locationText, coords, imageFile) => {
+  const executeComplaintSubmission = async (
+    issueText,
+    locationText,
+    coords,
+    imageFile,
+    phone = null,
+    pref = 'none',
+    waOptIn = false
+  ) => {
     setIsTyping(true);
     try {
       const result = await submitNewComplaint({
@@ -234,6 +269,9 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
         image: imageFile,
         sourceChannel: 'chat',
         citizenName: 'Chat Citizen',
+        citizenPhone: phone || null,
+        notificationPreference: phone ? pref : 'none',
+        whatsappOptIn: Boolean(phone && waOptIn),
       });
 
       setExtractedComplaint(result);
@@ -255,6 +293,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
                     `• **Safety Risk Score**: **${result.risk_score}/100 (${result.priority} priority)**\n` +
                     `• **Committed SLA**: **${result.sla_hours} hours**\n\n` +
                     (imageFile ? `• **Visual Evidence Attached**: 1 Photo processed.\n\n` : '') +
+                    (phone ? `• **Notifications Dispatched**: Live tracking sent to **${phone}** via **${pref.toUpperCase()}**.\n\n` : '') +
                     `Your official tracking reference card is ready below.`;
       } else if (result.domain === 'emergency') {
         replyText = `⚠️ **URGENT SAFETY ROUTING:** This appears to be an immediate emergency. CivicResolve has routed this to **${result.external_service_name || 'ERSS 112'}**.`;
@@ -279,7 +318,11 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
         awaitingPhotoDecision: false,
         awaitingPhotoUpload: false,
         photoFile: null,
-        photoPreview: null
+        photoPreview: null,
+        awaitingPhoneDecision: false,
+        citizenPhone: '',
+        notificationPref: 'sms',
+        whatsappOptIn: false,
       });
     } catch (err) {
       console.error("AI Chat error:", err);
@@ -328,8 +371,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
   };
 
   const handleConfirmPhotoSubmit = () => {
-    const { issueText, location, coords, photoFile } = collectedData;
-    executeComplaintSubmission(issueText, location, coords, photoFile);
+    proceedToPhoneDecision();
   };
 
   const handleChooseYesPhoto = () => {
@@ -341,7 +383,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
     const aiMsg = {
       id: Date.now(),
       sender: 'ai',
-      text: "Please upload your photo evidence below (JPG, PNG, or WebP up to 8MB), then click Submit.",
+      text: "Please upload your photo evidence below (JPG, PNG, or WebP up to 8MB), then click Next.",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
     setMessages(prev => [...prev, aiMsg]);
@@ -354,15 +396,8 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
       text: "No, continue without photo",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
-    const aiMsg = {
-      id: Date.now() + 1,
-      sender: 'ai',
-      text: "No problem. We can continue without a photo.",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-    setMessages(prev => [...prev, userMsg, aiMsg]);
-    const { issueText, location, coords } = collectedData;
-    executeComplaintSubmission(issueText, location, coords, null);
+    setMessages(prev => [...prev, userMsg]);
+    proceedToPhoneDecision();
   };
 
   const handleSendMessage = async (textToSend) => {
@@ -403,22 +438,48 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
         return;
       }
       if (isNegativeResponse(query)) {
+        handleChooseNoPhoto();
+        return;
+      }
+    }
+
+    // 3. If awaiting phone decision
+    if (collectedData.awaitingPhoneDecision) {
+      if (isNegativeResponse(query) || query.toLowerCase() === 'skip' || query.toLowerCase() === 'none') {
         setIsTyping(true);
         setTimeout(() => {
           const aiMsg = {
             id: Date.now() + 1,
             sender: 'ai',
-            text: "No problem. We can continue without a photo.",
+            text: "Understood, submitting without phone notifications.",
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           };
           setMessages(prev => [...prev, aiMsg]);
-          executeComplaintSubmission(collectedData.issueText, collectedData.location, collectedData.coords, null);
+          executeComplaintSubmission(
+            collectedData.issueText,
+            collectedData.location,
+            collectedData.coords,
+            collectedData.photoFile,
+            null,
+            'none',
+            false
+          );
         }, 300);
+        return;
+      }
+
+      // If user typed a phone number
+      const phoneDigits = query.replace(/[^\d+]/g, '');
+      if (phoneDigits.length >= 10) {
+        setCollectedData(prev => ({
+          ...prev,
+          citizenPhone: phoneDigits,
+        }));
         return;
       }
     }
 
-    // 3. If awaiting location response
+    // 4. If awaiting location response
     if (collectedData.awaitingLocation) {
       setIsTyping(true);
       setTimeout(() => {
@@ -444,7 +505,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
       return;
     }
 
-    // 4. Initial Complaint Input
+    // 5. Initial Complaint Input
     const queryLower = query.toLowerCase();
     const isVague = query.trim().split(/\s+/).length <= 4;
     const hasLocationWords = queryLower.includes('ward') || queryLower.includes('road') || queryLower.includes('near') || queryLower.includes('street') || queryLower.includes('gps') || queryLower.includes('sector') || queryLower.includes('cross') || queryLower.includes('nagar') || queryLower.includes('junction') || queryLower.includes('pillar') || queryLower.includes('colony');
@@ -511,7 +572,11 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
       awaitingPhotoDecision: false,
       awaitingPhotoUpload: false,
       photoFile: null,
-      photoPreview: null
+      photoPreview: null,
+      awaitingPhoneDecision: false,
+      citizenPhone: '',
+      notificationPref: 'sms',
+      whatsappOptIn: false,
     });
   };
 
@@ -528,7 +593,7 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
             CivicResolve AI Chat
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 font-medium">
-            Conversational intake assistant with confidence-aware clarification, photo evidence collection, and deterministic risk routing.
+            Conversational intake assistant with confidence-aware clarification, photo evidence collection, optional SMS/WhatsApp tracking, and deterministic risk routing.
           </p>
         </div>
 
@@ -640,6 +705,30 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
                             <PriorityBadge priority={msg.complaintData.priority} size="sm" />
                             <StatusBadge status={msg.complaintData.status} size="sm" />
                           </div>
+
+                          {/* Tracking Link display inside Chat card */}
+                          {msg.complaintData.tracking_token && (
+                            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                              <span className="text-[10px] uppercase font-mono font-bold text-slate-500 block">Secure Citizen Tracking Link</span>
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  readOnly
+                                  value={`${window.location.origin}/track/${msg.complaintData.tracking_token}`}
+                                  className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-[11px] font-mono text-slate-700 select-all"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => navigator.clipboard.writeText(`${window.location.origin}/track/${msg.complaintData.tracking_token}`)}
+                                  className="p-1.5 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 shrink-0"
+                                  title="Copy tracking link"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
                           <button
                             onClick={() => {
                               setTrackSearchId(msg.complaintData.complaint_id);
@@ -709,17 +798,137 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
                     className="flex-1 py-2 bg-[#e53935] hover:bg-[#d32f2f] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all"
                   >
                     <Check className="w-3.5 h-3.5" />
-                    <span>{collectedData.photoFile ? 'Submit Grievance with Photo' : 'Submit Without Photo'}</span>
+                    <span>{collectedData.photoFile ? 'Next: Notification Options' : 'Next: Notification Options'}</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => {
                       setCollectedData(prev => ({ ...prev, awaitingPhotoUpload: false }));
-                      executeComplaintSubmission(collectedData.issueText, collectedData.location, collectedData.coords, null);
+                      proceedToPhoneDecision();
                     }}
                     className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold border border-slate-300 transition-all"
                   >
                     Skip Photo
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* In-Chat Phone & Tracking Notification Prompt Card */}
+            {collectedData.awaitingPhoneDecision && (
+              <div className="p-4 bg-white border-2 border-slate-200 rounded-2xl shadow-md space-y-3 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#162044] flex items-center gap-1.5">
+                    <Smartphone className="w-4 h-4 text-[#722F37]" />
+                    <span>Citizen Notification Preference</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-medium">Optional</span>
+                </div>
+
+                <p className="text-xs text-slate-600">
+                  Provide your mobile number to receive live tracking links via SMS or WhatsApp.
+                </p>
+
+                <div className="space-y-2.5">
+                  <input
+                    type="tel"
+                    value={collectedData.citizenPhone}
+                    onChange={(e) => setCollectedData(prev => ({ ...prev, citizenPhone: e.target.value }))}
+                    placeholder="e.g. 9876543210 or +919876543210"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-red-500 font-mono shadow-inner"
+                  />
+
+                  {collectedData.citizenPhone.trim() && (
+                    <div className="space-y-2 pt-1">
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCollectedData(prev => ({ ...prev, notificationPref: 'sms' }))}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
+                            collectedData.notificationPref === 'sms'
+                              ? 'bg-[#162044] text-white shadow-sm'
+                              : 'bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}
+                        >
+                          SMS
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCollectedData(prev => ({ ...prev, notificationPref: 'whatsapp', whatsappOptIn: true }))}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
+                            collectedData.notificationPref === 'whatsapp'
+                              ? 'bg-emerald-700 text-white shadow-sm'
+                              : 'bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}
+                        >
+                          WhatsApp
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCollectedData(prev => ({ ...prev, notificationPref: 'both', whatsappOptIn: true }))}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all ${
+                            collectedData.notificationPref === 'both'
+                              ? 'bg-[#722F37] text-white shadow-sm'
+                              : 'bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}
+                        >
+                          Both
+                        </button>
+                      </div>
+
+                      {(collectedData.notificationPref === 'whatsapp' || collectedData.notificationPref === 'both') && (
+                        <label className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200 cursor-pointer text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={collectedData.whatsappOptIn}
+                            onChange={(e) => setCollectedData(prev => ({ ...prev, whatsappOptIn: e.target.checked }))}
+                            className="mt-0.5 w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                          />
+                          <span className="text-[11px] font-medium leading-tight">
+                            I consent to receive CivicResolve tracking links on WhatsApp.
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cleanPhone = collectedData.citizenPhone.trim();
+                      executeComplaintSubmission(
+                        collectedData.issueText,
+                        collectedData.location,
+                        collectedData.coords,
+                        collectedData.photoFile,
+                        cleanPhone || null,
+                        cleanPhone ? collectedData.notificationPref : 'none',
+                        Boolean(cleanPhone && collectedData.whatsappOptIn)
+                      );
+                    }}
+                    className="flex-1 py-2 bg-[#e53935] hover:bg-[#d32f2f] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Submit Grievance</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      executeComplaintSubmission(
+                        collectedData.issueText,
+                        collectedData.location,
+                        collectedData.coords,
+                        collectedData.photoFile,
+                        null,
+                        'none',
+                        false
+                      );
+                    }}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold border border-slate-300 transition-all"
+                  >
+                    Skip Phone
                   </button>
                 </div>
               </div>
@@ -811,6 +1020,25 @@ export default function AiChat({ setActivePage, setTrackSearchId }) {
                   </span>
                   <span className="text-sm font-black text-red-600 font-mono">{extractedComplaint.complaint_id}</span>
                 </div>
+
+                {extractedComplaint.tracking_token && (
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                    <span className="text-[10px] uppercase font-mono font-bold text-slate-500 block">Tracking Token</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-mono text-slate-700 truncate font-semibold">
+                        {extractedComplaint.tracking_token.slice(0, 16)}...
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard.writeText(`${window.location.origin}/track/${extractedComplaint.tracking_token}`)}
+                        className="p-1 rounded bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+                        title="Copy tracking link"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <div className="flex justify-between">

@@ -1,3 +1,4 @@
+import re
 import secrets
 import base64
 from datetime import datetime, timezone
@@ -24,6 +25,41 @@ def generate_complaint_id() -> str:
     return f"CR-{date_part}-{random_part}"
 
 
+def generate_tracking_token() -> str:
+    """Generate a cryptographically secure, unguessable tracking token."""
+    return secrets.token_urlsafe(32)
+
+
+def normalize_phone_number(raw_phone: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Normalizes phone numbers, specifically Indian numbers (+91) or general international E.164.
+    Returns: (normalized_phone, error_message)
+    """
+    if not raw_phone or not str(raw_phone).strip():
+        return None, None
+
+    p = str(raw_phone).strip()
+    cleaned = re.sub(r"[\s\-\(\)\.]", "", p)
+
+    # Indian 10-digit number starting with 6, 7, 8, or 9
+    if re.fullmatch(r"[6-9]\d{9}", cleaned):
+        return f"+91{cleaned}", None
+
+    # Indian 10-digit with 0 prefix: 09876543210
+    if re.fullmatch(r"0[6-9]\d{9}", cleaned):
+        return f"+91{cleaned[1:]}", None
+
+    # Indian number with 91 prefix without plus: 919876543210
+    if re.fullmatch(r"91[6-9]\d{9}", cleaned):
+        return f"+{cleaned}", None
+
+    # Standard E.164 format: + followed by 7 to 15 digits
+    if re.fullmatch(r"\+[1-9]\d{6,14}", cleaned):
+        return cleaned, None
+
+    return None, f"Invalid phone number format: '{p}'. Please provide a valid 10-digit mobile number (e.g. 9876543210) or international E.164 format (+919876543210)."
+
+
 def process_complaint(
     complaint_text: str,
     location_text: str = "",
@@ -34,13 +70,40 @@ def process_complaint(
     image_bytes: Optional[bytes] = None,
     image_mime: str = "image/jpeg",
     language_hint: str = "",
+    citizen_phone: Optional[str] = None,
+    notification_preference: Optional[str] = "none",
+    whatsapp_opt_in: Optional[bool] = False,
 ) -> Dict[str, Any]:
     """
     Main CivicResolve AI Orchestrator.
     Coordinates AI interpretation, location intelligence, duplicate detection,
-    deterministic risk scoring, and SLA assignment.
+    deterministic risk scoring, notification preferences, and SLA assignment.
     """
     trace = [f"Received complaint from channel: {source_channel.upper()}"]
+
+    # Normalize citizen phone & notification preferences
+    normalized_phone, phone_err = normalize_phone_number(citizen_phone)
+    if citizen_phone and phone_err:
+        raise ValueError(phone_err)
+
+    pref = (notification_preference or "none").strip().lower()
+    if pref not in {"none", "sms", "whatsapp", "both"}:
+        pref = "none"
+
+    if not normalized_phone:
+        pref = "none"
+        opt_in = False
+    else:
+        opt_in = bool(whatsapp_opt_in)
+        if pref in {"whatsapp", "both"} and not opt_in:
+            if pref == "both":
+                pref = "sms"
+            else:
+                pref = "none"
+
+    if normalized_phone:
+        masked = "*" * max(0, len(normalized_phone) - 4) + normalized_phone[-4:]
+        trace.append(f"Citizen notifications enabled: {pref.upper()} ({masked})")
 
     # 1. AI Multimodal Fact Extraction (Separate from deterministic enforcement)
     analysis, used_ai = analyze_complaint(
@@ -139,6 +202,9 @@ def process_complaint(
                 )
                 trace.append(f"Primary complaint risk boosted to {re_risk['score']}/100 based on {updated_count} citizen reports")
                 
+                parent_complaint["risk_score"] = re_risk["score"]
+                parent_complaint["priority"] = re_risk["priority"]
+                parent_complaint["risk_reasons"] = re_risk["reasons"]
                 parent_complaint["agent_trace"] = trace
                 parent_complaint["duplicate_link_info"] = {
                     "is_duplicate": True,
@@ -151,6 +217,7 @@ def process_complaint(
 
         # New Independent Municipal Issue
         complaint_id = generate_complaint_id()
+        tracking_token = generate_tracking_token()
         trace.append(f"Duplicate scan cleared. Generating new Ticket ID: {complaint_id}")
 
         # Deterministic Risk Engine (Evaluates safety risk independently of domain classification)
@@ -211,6 +278,10 @@ def process_complaint(
             "external_service_name": "",
             "external_service_url": "",
             "initial_image_url": initial_img_url,
+            "citizen_phone": normalized_phone,
+            "notification_preference": pref,
+            "whatsapp_opt_in": opt_in,
+            "tracking_token": tracking_token,
             "created_at": created_at_now,
             "agent_trace": trace,
         }
@@ -226,6 +297,7 @@ def process_complaint(
     # 6. EXTERNAL PUBLIC SERVICE & EMERGENCY PIPELINE
     else:
         complaint_id = generate_complaint_id()
+        tracking_token = generate_tracking_token()
         service = get_external_service(service_type)
         is_emergency = domain == "emergency"
         created_at_now = datetime.now(timezone.utc).isoformat()
@@ -267,6 +339,10 @@ def process_complaint(
             "external_instruction": service["instruction"],
             "external_scope": service["verified_scope"],
             "initial_image_url": initial_img_url,
+            "citizen_phone": normalized_phone,
+            "notification_preference": pref,
+            "whatsapp_opt_in": opt_in,
+            "tracking_token": tracking_token,
             "created_at": created_at_now,
             "agent_trace": trace,
         }

@@ -6,9 +6,12 @@ import time
 
 from app.browser_phone import router as browser_phone_router
 from app.evidence_routes import router as evidence_router
+from app.tracking_routes import router as tracking_router
+from app.notification_routes import router as notification_router
 from dotenv import load_dotenv
 from app.civicresolve_client import CivicResolveClient, CivicResolveError
 from app.sms_sender import CivicResolveSMS
+from app.whatsapp_sender import CivicResolveWhatsApp
 from app.evidence_links import EvidenceLinkStore
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import Response
@@ -55,6 +58,14 @@ app.include_router(
 
 app.include_router(
     evidence_router
+)
+
+app.include_router(
+    tracking_router
+)
+
+app.include_router(
+    notification_router
 )
 
 
@@ -682,13 +693,24 @@ async def media_stream(websocket: WebSocket):
                 )
 
                 try:
+                    recipient = (
+                        caller_number
+                        or os.getenv(
+                            "BROWSER_TEST_SMS_TO",
+                            "",
+                        ).strip()
+                    )
+
                     civicresolve = CivicResolveClient()
 
                     backend_start = time.perf_counter()
 
                     backend_result = (
                         await civicresolve.submit_complaint(
-                            state
+                            state,
+                            citizen_phone=recipient if recipient else None,
+                            notification_preference="both" if (state.evidence_opt_in is True and recipient) else "none",
+                            whatsapp_opt_in=bool(state.evidence_opt_in is True),
                         )
                     )
 
@@ -728,8 +750,8 @@ async def media_stream(websocket: WebSocket):
                             "registered successfully. "
                             f"Your complaint ID is "
                             f"{state.complaint_id}. "
-                            "I am sending your secure evidence "
-                            "link to your phone now."
+                            "I am sending your evidence and "
+                            "tracking links to your phone now."
                         )
                     else:
                         reply = (
@@ -804,7 +826,7 @@ async def media_stream(websocket: WebSocket):
                     )
 
             # =================================================
-            # SECURE EVIDENCE LINK SMS
+            # SECURE EVIDENCE & TRACKING LINKS (SMS + WHATSAPP)
             # =================================================
 
             if (
@@ -825,6 +847,8 @@ async def media_stream(websocket: WebSocket):
                 if recipient:
                     token = None
                     link_store = None
+                    sms_sent = False
+                    wa_sent = False
 
                     try:
                         link_store = EvidenceLinkStore()
@@ -844,36 +868,69 @@ async def media_stream(websocket: WebSocket):
                             f"https://{public_host}"
                             f"/evidence/{token}"
                         )
-
-                        print(
-                            f"🔗 Evidence links use: "
-                            f"https://{public_host}/evidence/<token>",
-                            flush=True,
-                        )
-
-                        sms = CivicResolveSMS()
-
-                        await asyncio.to_thread(
-                            sms.send_evidence_link,
-                            recipient,
-                            state.complaint_id,
-                            evidence_url,
-                        )
-
-                        state.evidence_link_sent = True
-
-                        reply = (
-                            f"Done. Your complaint "
-                            f"{state.complaint_id} is registered, "
-                            "and I sent the secure evidence link "
-                            "to your phone. You can use it to add "
-                            "a photo and your current location."
+                        tracking_token = backend_result.get("tracking_token") if isinstance(backend_result, dict) else None
+                        tracking_url = (
+                            f"https://{public_host}/track/{tracking_token}"
+                            if tracking_token
+                            else None
                         )
 
                         print(
-                            "✅ SECURE EVIDENCE SMS SENT",
+                            f"🔗 Evidence URL: {evidence_url}",
                             flush=True,
                         )
+                        print(
+                            f"🔗 Tracking URL: {tracking_url}",
+                            flush=True,
+                        )
+
+                        async def _send_sms_link():
+                            nonlocal sms_sent
+                            try:
+                                sms = CivicResolveSMS()
+                                await asyncio.to_thread(
+                                    sms.send_complaint_links,
+                                    recipient,
+                                    state.complaint_id,
+                                    evidence_url,
+                                    tracking_url,
+                                )
+                                sms_sent = True
+                                print("✅ SECURE EVIDENCE & TRACKING SMS SENT", flush=True)
+                            except Exception as s_exc:
+                                print(f"❌ EVIDENCE SMS FAILED: {type(s_exc).__name__}: {s_exc}", flush=True)
+
+                        async def _send_wa_link():
+                            nonlocal wa_sent
+                            try:
+                                wa = CivicResolveWhatsApp()
+                                await asyncio.to_thread(
+                                    wa.send_complaint_links,
+                                    recipient,
+                                    state.complaint_id,
+                                    evidence_url,
+                                    tracking_url,
+                                )
+                                wa_sent = True
+                                print("✅ SECURE EVIDENCE & TRACKING WHATSAPP SENT", flush=True)
+                            except Exception as w_exc:
+                                print(f"❌ EVIDENCE WHATSAPP FAILED: {type(w_exc).__name__}: {w_exc}", flush=True)
+
+                        # Attempt both SMS and WhatsApp simultaneously with failure isolation
+                        await asyncio.gather(_send_sms_link(), _send_wa_link(), return_exceptions=True)
+
+                        if sms_sent or wa_sent:
+                            state.evidence_link_sent = True
+                            reply = (
+                                f"Done. Your complaint {state.complaint_id} is registered. "
+                                "I've sent your evidence and tracking links to your phone. Goodbye."
+                            )
+                        else:
+                            state.evidence_link_sent = False
+                            reply = (
+                                f"Your complaint {state.complaint_id} is registered, "
+                                "but I could not send the links to your phone right now. Goodbye."
+                            )
 
                     except Exception as exc:
                         if token and link_store:
@@ -883,14 +940,10 @@ async def media_stream(websocket: WebSocket):
                                 pass
 
                         state.evidence_link_sent = False
-
-                        # Complaint is already registered.
-                        # Do not return to the pre-submission
-                        # evidence-permission state.
                         state.awaiting_evidence_permission = False
 
                         print(
-                            "❌ EVIDENCE SMS FAILED:",
+                            "❌ LINK DISPATCH FAILED:",
                             f"{type(exc).__name__}: {exc}",
                             flush=True,
                         )
@@ -898,21 +951,22 @@ async def media_stream(websocket: WebSocket):
                         reply = (
                             f"Your complaint {state.complaint_id} "
                             "is registered, but I could not send "
-                            "the evidence link right now."
+                            "the links right now. Goodbye."
                         )
 
                 else:
                     print(
-                        "⚠️ No SMS recipient available",
+                        "⚠️ No recipient phone available",
                         flush=True,
                     )
 
                     reply = (
-                        "Your complaint is registered, "
-                        "but I do not have a mobile number "
-                        "to send the evidence link to. "
-                        "Your complaint is not affected."
+                        f"Done. Your complaint {state.complaint_id} is registered. Goodbye."
                     )
+            elif complaint_submitted_now and state.submitted and state.complaint_id:
+                reply = (
+                    f"Done. Your complaint {state.complaint_id} is registered. Goodbye."
+                )
 
             print(f"🤖 CIVICRESOLVE: {reply}")
             print(

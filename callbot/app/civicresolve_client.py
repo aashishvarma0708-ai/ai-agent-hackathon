@@ -182,6 +182,9 @@ class CivicResolveClient:
         citizen_name: str = "",
         latitude: Optional[float] = None,
         longitude: Optional[float] = None,
+        citizen_phone: Optional[str] = None,
+        notification_preference: Optional[str] = None,
+        whatsapp_opt_in: Optional[bool] = None,
     ) -> Dict[str, Any]:
 
         if state.route != "municipal":
@@ -255,6 +258,15 @@ class CivicResolveClient:
                 self.language_hint(
                     state
                 ),
+
+            "citizen_phone":
+                citizen_phone,
+
+            "notification_preference":
+                notification_preference or "none",
+
+            "whatsapp_opt_in":
+                bool(whatsapp_opt_in),
         }
 
         url = (

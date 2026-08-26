@@ -799,7 +799,7 @@ class CallAgent:
 
         state.awaiting_safety_answer = False
 
-        # Ask for optional evidence permission BEFORE
+        # Ask for optional evidence and tracking permission BEFORE
         # the final complaint submission confirmation.
         state.awaiting_confirmation = False
         state.awaiting_evidence_permission = True
@@ -811,9 +811,8 @@ class CallAgent:
         return (
             f"Okay. I have a report of "
             f"{summary}. "
-            "Before I submit it, would you like me "
-            "to send you a secure link after registration "
-            "so you can add a photo and your current location?"
+            "Would you like me to send secure evidence and complaint tracking links "
+            "to this number by SMS and WhatsApp?"
         )
 
 
@@ -925,7 +924,7 @@ class CallAgent:
 
 
         # =================================================
-        # PHOTO + LOCATION LINK PERMISSION
+        # PHOTO + LOCATION LINK PERMISSION (SMS & WHATSAPP)
         # =================================================
 
         if (
@@ -941,8 +940,8 @@ class CallAgent:
                 state.awaiting_confirmation = True
 
                 reply = (
-                    "Great. I will send the secure evidence "
-                    "link after the complaint is registered. "
+                    "Great. I will send your evidence and complaint "
+                    "tracking links after the complaint is registered. "
                     "Would you like me to submit this civic "
                     "complaint now?"
                 )
@@ -968,17 +967,11 @@ class CallAgent:
             ):
                 state.evidence_opt_in = False
                 state.awaiting_evidence_permission = False
-
-                # Without the secure link we cannot obtain GPS,
-                # so collect a precise spoken location instead.
-                state.awaiting_confirmation = False
-                state.awaiting_manual_location = True
+                state.awaiting_confirmation = True
 
                 reply = (
-                    "No problem. I will not send an evidence "
-                    "link. Before I submit the complaint, "
-                    "please tell me the exact location, address, "
-                    "or nearest landmark."
+                    "No problem. I will not send any links to your phone. "
+                    "Would you like me to submit this civic complaint now?"
                 )
 
                 state.add_history(
@@ -998,9 +991,8 @@ class CallAgent:
                 )
 
             reply = (
-                "Would you like me to send you "
-                "a secure link for adding a photo "
-                "and your current location? "
+                "Would you like me to send secure evidence and complaint tracking links "
+                "to this number by SMS and WhatsApp? "
                 "Please say yes or no."
             )
 
@@ -1033,7 +1025,7 @@ class CallAgent:
                     "You're welcome. "
                     f"Your complaint {complaint_id} "
                     "is registered, and the secure "
-                    "evidence link has been sent to "
+                    "evidence and tracking links have been sent to "
                     "your phone. Goodbye."
                 )
 
@@ -1041,8 +1033,7 @@ class CallAgent:
                 reply = (
                     "You're welcome. "
                     f"Your complaint {complaint_id} "
-                    "is registered. No evidence link "
-                    "was requested. Goodbye."
+                    "is registered. Goodbye."
                 )
 
             else:

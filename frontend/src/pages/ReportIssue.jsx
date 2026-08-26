@@ -16,7 +16,12 @@ import {
   AlertCircle,
   Navigation,
   Copy,
-  Users
+  Users,
+  Phone,
+  MessageSquare,
+  Smartphone,
+  Check,
+  CheckCircle2
 } from 'lucide-react';
 import { useComplaints } from '../context/ComplaintContext';
 import PriorityBadge from '../components/PriorityBadge';
@@ -28,6 +33,9 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
   const { submitNewComplaint } = useComplaints();
 
   const [citizenName, setCitizenName] = useState('');
+  const [citizenPhone, setCitizenPhone] = useState('');
+  const [notificationPref, setNotificationPref] = useState('sms');
+  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [complaintText, setComplaintText] = useState('');
   const [locationText, setLocationText] = useState('');
   const [coords, setCoords] = useState({ lat: null, lon: null });
@@ -81,6 +89,12 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
     e.preventDefault();
     if (!complaintText.trim() && !imageFile && !imagePreview) return;
 
+    const cleanPhone = citizenPhone.trim();
+    if (cleanPhone && (notificationPref === 'whatsapp' || notificationPref === 'both') && !whatsappOptIn) {
+      setErrorMessage("Please check the consent box to receive WhatsApp updates, or choose SMS.");
+      return;
+    }
+
     setIsSubmitting(true);
     setResultComplaint(null);
     setErrorMessage('');
@@ -93,6 +107,9 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
         longitude: coords.lon,
         sourceChannel: 'web',
         citizenName: citizenName.trim(),
+        citizenPhone: cleanPhone || null,
+        notificationPreference: cleanPhone ? notificationPref : 'none',
+        whatsappOptIn: Boolean(cleanPhone && whatsappOptIn),
         image: imageFile,
       });
 
@@ -144,6 +161,86 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
                 placeholder="e.g. Aarav Sharma"
                 className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-red-500 focus:bg-white transition-all shadow-inner"
               />
+            </div>
+
+            {/* Citizen Phone (Optional) */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                  <Smartphone className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Mobile Phone Number</span>
+                  <span className="text-slate-500 font-normal">(Optional)</span>
+                </label>
+                <p className="text-[11px] text-slate-500 mb-2">
+                  Add a mobile number if you'd like to receive complaint tracking updates.
+                </p>
+                <input
+                  type="tel"
+                  value={citizenPhone}
+                  onChange={(e) => setCitizenPhone(e.target.value)}
+                  placeholder="e.g. 9876543210 or +919876543210"
+                  className="w-full px-4 py-2 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-red-500 transition-all font-mono shadow-sm"
+                />
+              </div>
+
+              {citizenPhone.trim() && (
+                <div className="space-y-3 pt-2 border-t border-slate-200 animate-in fade-in duration-200">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
+                      Notification Channel Preference
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNotificationPref('sms')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                          notificationPref === 'sms'
+                            ? 'bg-[#162044] text-white shadow-sm'
+                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>SMS</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNotificationPref('whatsapp')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                          notificationPref === 'whatsapp'
+                            ? 'bg-emerald-700 text-white shadow-sm'
+                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>WhatsApp</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNotificationPref('both')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                          notificationPref === 'both'
+                            ? 'bg-[#722F37] text-white shadow-sm'
+                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>Both</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {(notificationPref === 'whatsapp' || notificationPref === 'both') && (
+                    <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-white border border-slate-200 cursor-pointer text-slate-700 hover:bg-slate-50 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={whatsappOptIn}
+                        onChange={(e) => setWhatsappOptIn(e.target.checked)}
+                        className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                      />
+                      <span className="text-xs font-medium leading-tight">
+                        I agree to receive CivicResolve complaint updates and tracking links on WhatsApp.
+                      </span>
+                    </label>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Description */}
@@ -336,6 +433,35 @@ export default function ReportIssue({ setActivePage, setTrackSearchId }) {
                       </a>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Tracking Link & Notification Status */}
+              {resultComplaint.tracking_token && (
+                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                  <span className="text-[10px] uppercase font-mono font-bold text-slate-500 block">Secure Tracking Link</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={`${window.location.origin}/track/${resultComplaint.tracking_token}`}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-700 select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(`${window.location.origin}/track/${resultComplaint.tracking_token}`)}
+                      className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 shrink-0 text-xs"
+                      title="Copy tracking link"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  {resultComplaint.citizen_phone && (
+                    <p className="text-[11px] text-emerald-700 font-medium flex items-center gap-1 mt-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Tracking link dispatched to {resultComplaint.citizen_phone} via {resultComplaint.notification_preference || 'SMS'}.</span>
+                    </p>
+                  )}
                 </div>
               )}
 

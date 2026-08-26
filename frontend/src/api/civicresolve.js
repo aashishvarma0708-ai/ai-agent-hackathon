@@ -45,7 +45,7 @@ export async function adminLogin({ email, password }) {
 }
 
 /**
- * Submit complaint (supports text, location, latitude, longitude, and optional image file/blob)
+ * Submit complaint (supports text, location, latitude, longitude, optional phone notifications, and optional image file/blob)
  */
 export async function submitComplaint({
   complaint_text = '',
@@ -55,6 +55,9 @@ export async function submitComplaint({
   citizen_name = '',
   source_channel = 'web',
   language_hint = '',
+  citizen_phone = null,
+  notification_preference = 'none',
+  whatsapp_opt_in = false,
   image = null,
 }) {
   let res;
@@ -68,6 +71,9 @@ export async function submitComplaint({
     formData.append('citizen_name', citizen_name);
     formData.append('source_channel', source_channel);
     formData.append('language_hint', language_hint);
+    if (citizen_phone) formData.append('citizen_phone', citizen_phone);
+    if (notification_preference) formData.append('notification_preference', notification_preference);
+    formData.append('whatsapp_opt_in', whatsapp_opt_in ? 'true' : 'false');
 
     if (image instanceof File || image instanceof Blob) {
       formData.append('image', image, 'evidence.jpg');
@@ -91,6 +97,9 @@ export async function submitComplaint({
         citizen_name,
         source_channel,
         language_hint,
+        citizen_phone,
+        notification_preference,
+        whatsapp_opt_in,
       }),
     });
   }
@@ -100,6 +109,21 @@ export async function submitComplaint({
     throw new Error(errData.detail || 'Failed to submit complaint');
   }
 
+  return res.json();
+}
+
+/**
+ * Fetch public tracking data by secure token
+ */
+export async function getPublicTracking(trackingToken) {
+  if (!trackingToken) return null;
+  const cleanToken = encodeURIComponent(trackingToken.trim());
+  const res = await fetch(`${API_BASE_URL}/api/public/track/${cleanToken}`);
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    const errData = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errData.detail || 'Failed to load tracking data');
+  }
   return res.json();
 }
 
