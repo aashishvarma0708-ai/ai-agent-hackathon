@@ -392,6 +392,7 @@ async def media_stream(websocket: WebSocket):
 
     bot_playback_pending = False
     current_mark_name = None
+    hangup_after_mark = None
     tts_active = False
     reply_counter = 0
 
@@ -407,6 +408,7 @@ async def media_stream(websocket: WebSocket):
     ):
         nonlocal bot_playback_pending
         nonlocal current_mark_name
+        nonlocal hangup_after_mark
         nonlocal tts_active
         nonlocal reply_counter
 
@@ -419,6 +421,15 @@ async def media_stream(websocket: WebSocket):
 
         reply_counter += 1
         mark_name = f"{mark_prefix}_{reply_counter}"
+
+        # A final reply containing "goodbye" should end the call,
+        # but only after Twilio confirms that its audio finished.
+        if "goodbye" in text.lower():
+            hangup_after_mark = mark_name
+            print(
+                f"👋 Goodbye detected — "
+                f"will hang up after {mark_name}"
+            )
 
         start_time = time.perf_counter()
         first_audio = True
@@ -485,6 +496,7 @@ async def media_stream(websocket: WebSocket):
         nonlocal reply_task
         nonlocal bot_playback_pending
         nonlocal current_mark_name
+        nonlocal hangup_after_mark
 
         task = reply_task
         was_tts_active = tts_active
@@ -506,6 +518,7 @@ async def media_stream(websocket: WebSocket):
 
         bot_playback_pending = False
         current_mark_name = None
+        hangup_after_mark = None
 
         if task is not None and not task.done():
             task.cancel()
@@ -1259,9 +1272,27 @@ async def media_stream(websocket: WebSocket):
                     mark_name
                     and mark_name == current_mark_name
                 ):
+                    should_hangup = (
+                        hangup_after_mark is not None
+                        and mark_name == hangup_after_mark
+                    )
+
                     bot_playback_pending = False
                     current_mark_name = None
                     print("✅ Bot playback completed")
+
+                    if should_hangup:
+                        hangup_after_mark = None
+                        call_stopping = True
+
+                        print(
+                            "☎️ Goodbye playback finished — "
+                            "ending CivicResolve call",
+                            flush=True,
+                        )
+
+                        await websocket.close(code=1000)
+                        break
 
                 continue
 

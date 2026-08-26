@@ -4,6 +4,7 @@ import re
 from groq import Groq
 
 from .config import GROQ_API_KEY, TEXT_MODEL, VISION_MODEL
+from .routing import is_explicit_emergency, detect_municipal_category, detect_external_service
 
 
 SYSTEM_PROMPT = """
@@ -11,6 +12,19 @@ You are CivicResolve's complaint understanding and public-service triage model.
 
 Your ONLY job is to interpret the citizen's supplied text and visual evidence
 into structured public-service facts.
+
+CRITICAL ARCHITECTURAL RULE:
+Domain classification and safety-risk classification are INDEPENDENT.
+1. The type of physical/civic issue determines the domain:
+   - Streetlights, public lights, roads, potholes, garbage, drainage, manholes,
+     water pipes, public infrastructure are ALL domain="municipal".
+2. Safety concerns, danger, or hazards (e.g., "immediate safety risk",
+   "dangerous", "people may get hurt", "cars are swerving", "someone may fall"):
+   - Must be listed in "severity_indicators".
+   - MUST NOT convert a municipal complaint into domain="emergency".
+   - Safety risk is handled independently by the deterministic risk engine.
+3. Domain="emergency" is reserved ONLY for explicit life-threatening non-maintenance
+   crises: active fires, heart attacks/unconscious medical crises, violent crime in progress.
 
 IMPORTANT VISUAL RULES:
 
@@ -54,37 +68,38 @@ DOMAIN RULES:
 
 1. municipal:
    Roads, potholes, damaged streets, garbage, waste, drainage, sewage,
-   waterlogging, water supply, leaking pipes, streetlights and damaged
-   public infrastructure.
+   manholes, waterlogging, water supply, leaking pipes, streetlights,
+   broken public lights, and damaged public infrastructure.
 
 2. emergency:
-   Immediate danger requiring police, fire or medical emergency response.
+   Immediate danger requiring police, fire or medical emergency response
+   (e.g., active house fire, cardiac arrest, armed robbery).
 
 3. other_public_service:
-   Police/crime, legal, consumer or medical-service matters that are not
-   municipal infrastructure complaints.
+   Police/crime (theft, disputes), legal aid, consumer grievances, or non-emergency
+   medical-service matters that are not municipal infrastructure complaints.
 
 4. unknown:
    Evidence does not clearly identify a supported public-service issue.
 
 CATEGORY RULES:
 
-- pothole, broken road, road crack, damaged road, damaged footpath
+- pothole, broken road, road crack, damaged road, damaged footpath, crater
   -> category="roads"
 
-- garbage pile, overflowing bin, dumped waste, rubbish
+- garbage pile, overflowing bin, dumped waste, rubbish, litter
   -> category="garbage"
 
-- blocked drain, sewage overflow, open drain, waterlogging
+- blocked drain, sewage overflow, open drain, manhole, open manhole, waterlogging
   -> category="drainage"
 
-- leaking water pipe, burst pipe, water supply problem
+- leaking water pipe, burst pipe, water supply problem, pipeline leak
   -> category="water"
 
-- broken streetlight, damaged lamp post, non-working street lamp
+- broken streetlight, damaged lamp post, non-working street lamp, broken light, dark street
   -> category="streetlights"
 
-- damaged bridge, railing, bus stop, park asset, public structure
+- damaged bridge, railing, bus stop, park asset, public structure, fallen tree
   -> category="public_infrastructure"
 
 SUBCATEGORY RULES:
@@ -135,19 +150,16 @@ CONSISTENCY RULES:
 - If domain is not "municipal":
     category MUST be "unknown".
 
+- A clearly visible broken light/streetlight MUST be classified:
+    domain="municipal"
+    service_type="municipal"
+    category="streetlights"
+
 - A clearly visible pothole MUST be classified:
     domain="municipal"
     service_type="municipal"
     category="roads"
     subcategory="pothole"
-
-- A clearly visible garbage pile MUST be classified:
-    domain="municipal"
-    category="garbage"
-
-- A clearly visible blocked/open drain or waterlogging MUST be classified:
-    domain="municipal"
-    category="drainage"
 
 - Base every decision only on supplied complaint evidence.
 
@@ -162,63 +174,65 @@ Return only the JSON object.
 
 
 def _fallback(text: str) -> dict:
-    t = (text or "").lower()
-
-    emergency_terms = [
-        "fire", "burning", "someone is attacking", "threatening me",
-        "life danger", "unconscious", "severe bleeding", "accident now",
-    ]
-    police_terms = ["stolen", "theft", "robbery", "assault", "harassment", "crime", "threat"]
-    legal_terms = ["legal aid", "lawyer", "court", "legal case", "property dispute"]
-    consumer_terms = ["seller", "refund", "online order", "consumer", "defective product", "company complaint"]
-    medical_terms = ["doctor", "hospital complaint", "medical complaint", "health complaint"]
-
-    if any(x in t for x in emergency_terms):
-        service = "fire" if "fire" in t or "burning" in t else "police"
-        if any(x in t for x in ["unconscious", "bleeding", "medical"]):
-            service = "medical"
+    # 1. Check for explicit non-municipal life-threatening emergency
+    emerg = is_explicit_emergency(text)
+    if emerg:
+        dom, service = emerg
         return {
-            "domain": "emergency", "service_type": service, "category": "unknown",
-            "subcategory": "urgent_public_safety", "summary": text[:180],
-            "location_text": "", "language": "unknown", "confidence": 0.68,
+            "domain": dom,
+            "service_type": service,
+            "category": "unknown",
+            "subcategory": service if service in ["fire"] else "immediate_danger",
+            "summary": text[:180],
+            "location_text": "",
+            "language": "unknown",
+            "confidence": 0.90,
             "severity_indicators": ["possible immediate danger"],
-            "needs_clarification": False, "clarification_question": ""
+            "needs_clarification": False,
+            "clarification_question": "",
         }
 
-    if any(x in t for x in police_terms):
-        return _external(text, "police", "police_or_crime")
-    if any(x in t for x in legal_terms):
-        return _external(text, "legal", "legal_help")
-    if any(x in t for x in consumer_terms):
-        return _external(text, "consumer", "consumer_grievance")
-    if any(x in t for x in medical_terms):
-        return _external(text, "medical", "health_service")
+    # 2. Check for municipal issues using deterministic taxonomy
+    muni = detect_municipal_category(text)
+    if muni:
+        cat, subcat = muni
+        sev = []
+        t = (text or "").lower()
+        if any(w in t for w in ["safety risk", "dangerous", "danger", "hazard", "fall", "injury", "accident", "swerve", "swerving", "hurt", "open manhole"]):
+            sev.append("immediate safety hazard reported")
+        return {
+            "domain": "municipal",
+            "service_type": "municipal",
+            "category": cat,
+            "subcategory": subcat,
+            "summary": text[:180],
+            "location_text": "",
+            "language": "unknown",
+            "confidence": 0.85,
+            "severity_indicators": sev,
+            "needs_clarification": False,
+            "clarification_question": "",
+        }
 
-    category_map = [
-        ("roads", ["pothole", "road", "footpath", "sidewalk", "street damaged"]),
-        ("garbage", ["garbage", "trash", "waste", "rubbish", "dustbin"]),
-        ("drainage", ["drain", "drainage", "sewage", "sewer", "waterlogging"]),
-        ("water", ["water leak", "no water", "water supply", "pipe burst", "pipeline"]),
-        ("streetlights", ["streetlight", "street light", "lamp post", "light not working"]),
-        ("public_infrastructure", ["public building", "bus stop", "park", "bridge", "railing"]),
-    ]
+    # 3. Check for external non-emergency public service
+    ext = detect_external_service(text)
+    if ext:
+        dom, service, subcat = ext
+        return _external(text, service, subcat)
 
-    for cat, words in category_map:
-        if any(w in t for w in words):
-            return {
-                "domain": "municipal", "service_type": "municipal", "category": cat,
-                "subcategory": cat, "summary": text[:180],
-                "location_text": "", "language": "unknown", "confidence": 0.62,
-                "severity_indicators": [],
-                "needs_clarification": False, "clarification_question": ""
-            }
-
+    # 4. Unknown / requires clarification
     return {
-        "domain": "unknown", "service_type": "other", "category": "unknown",
-        "subcategory": "unknown", "summary": text[:180],
-        "location_text": "", "language": "unknown", "confidence": 0.35,
-        "severity_indicators": [], "needs_clarification": True,
-        "clarification_question": "Please describe what happened and where it happened."
+        "domain": "unknown",
+        "service_type": "other",
+        "category": "unknown",
+        "subcategory": "unknown",
+        "summary": text[:180],
+        "location_text": "",
+        "language": "unknown",
+        "confidence": 0.35,
+        "severity_indicators": [],
+        "needs_clarification": True,
+        "clarification_question": "Please describe what happened and where it happened.",
     }
 
 
@@ -231,11 +245,12 @@ def _external(text, service, subcategory):
         "summary": text[:180],
         "location_text": "",
         "language": "unknown",
-        "confidence": 0.66,
+        "confidence": 0.75,
         "severity_indicators": [],
         "needs_clarification": False,
         "clarification_question": "",
     }
+
 
 
 def _normalize(data: dict) -> dict:

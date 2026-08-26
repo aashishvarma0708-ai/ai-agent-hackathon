@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 from .agent import analyze_complaint
 from .location import parse_location
 from .risk import calculate_risk
-from .routing import route_municipal_issue
+from .routing import route_municipal_issue, detect_municipal_category, is_explicit_emergency
 from .services import get_external_service
 from .duplicates import evaluate_duplicate
 from .sla import get_sla_hours, calculate_sla_deadline, evaluate_sla_state
@@ -60,11 +60,34 @@ def process_complaint(
     if lang.lower() != "english":
         trace.append(f"Language identified: {lang} (Preserved original text + translated)")
 
-    # 4. Domain Separation Guardrails
+    # 4. Domain Separation Guardrails & Municipal Override Guard
     domain = analysis.get("domain", "municipal")
     service_type = analysis.get("service_type", "municipal")
     category = analysis.get("category", "roads")
     summary = analysis.get("summary", "") or complaint_text[:140]
+
+    # Municipal Override Guard: Check if the complaint clearly matches a known municipal issue
+    # and is NOT an explicit non-municipal life-threatening emergency (fire, heart attack, armed robbery)
+    is_emerg = is_explicit_emergency(complaint_text)
+    muni_match = detect_municipal_category(complaint_text)
+
+    overridden_to_municipal = False
+    if not is_emerg and muni_match:
+        matched_cat, matched_sub = muni_match
+        if domain != "municipal" or category == "unknown" or not category:
+            domain = "municipal"
+            service_type = "municipal"
+            category = matched_cat
+            if not analysis.get("subcategory") or analysis.get("subcategory") == "unknown":
+                analysis["subcategory"] = matched_sub
+            overridden_to_municipal = True
+            trace.append(f"Municipal domain guard → {category.upper()}")
+        elif domain == "municipal" and category == "unknown":
+            category = matched_cat
+            if not analysis.get("subcategory") or analysis.get("subcategory") == "unknown":
+                analysis["subcategory"] = matched_sub
+            overridden_to_municipal = True
+            trace.append(f"Municipal domain guard → {category.upper()}")
 
     # Process image URL representation if uploaded
     initial_img_url = ""
@@ -74,7 +97,8 @@ def process_complaint(
 
     # 5. MUNICIPAL DOMAIN PIPELINE
     if domain == "municipal":
-        trace.append(f"Public-service triage → MUNICIPAL domain [{category.upper()}]")
+        if not overridden_to_municipal:
+            trace.append(f"Public-service triage → MUNICIPAL domain [{category.upper()}]")
 
         # Duplicate Detection Engine
         dup_eval = evaluate_duplicate(
@@ -129,7 +153,7 @@ def process_complaint(
         complaint_id = generate_complaint_id()
         trace.append(f"Duplicate scan cleared. Generating new Ticket ID: {complaint_id}")
 
-        # Deterministic Risk Engine
+        # Deterministic Risk Engine (Evaluates safety risk independently of domain classification)
         risk = calculate_risk(
             category=category,
             text=complaint_text,
@@ -137,7 +161,14 @@ def process_complaint(
             indicators=analysis.get("severity_indicators", []),
             duplicate_count=0
         )
+        
+        # Check if safety hazards elevated the priority
+        has_safety_hazard = any("Immediate safety hazard" in r for r in risk["reasons"])
+        if has_safety_hazard:
+            trace.append("Safety risk elevated municipal priority")
+
         trace.append(f"Deterministic risk engine → {risk['score']}/100 [{risk['priority']}]")
+
 
         # Routing & Department Dispatch
         route = route_municipal_issue(category)
