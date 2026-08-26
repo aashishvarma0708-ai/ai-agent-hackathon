@@ -213,7 +213,28 @@ def process_complaint(
                     "report_count": updated_count,
                     "message": f"This grievance was matched with existing complaint {parent_id} and registered as a supporting report."
                 }
-                return parent_complaint
+                # Ensure duplicate/supporting reporters can track the primary complaint.
+                # Older complaints may predate secure tracking and have no token.
+                if not parent_complaint.get("tracking_token"):
+                    parent_complaint["tracking_token"] = generate_tracking_token()
+                    trace.append(
+                        "Secure tracking token assigned to primary complaint for supporting reporter"
+                    )
+
+                # Persist updated report count/risk/token on the PRIMARY complaint.
+                # Do not overwrite the primary citizen's phone/preferences with
+                # the supporting reporter's contact details.
+                parent_complaint["agent_trace"] = trace
+                save_complaint(parent_complaint)
+
+                # Return a response tailored to THIS supporting reporter so
+                # backend/main.py can dispatch their requested notification.
+                duplicate_result = dict(parent_complaint)
+                duplicate_result["citizen_phone"] = normalized_phone
+                duplicate_result["notification_preference"] = pref
+                duplicate_result["whatsapp_opt_in"] = opt_in
+
+                return duplicate_result
 
         # New Independent Municipal Issue
         complaint_id = generate_complaint_id()
