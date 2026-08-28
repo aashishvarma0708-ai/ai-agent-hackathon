@@ -280,7 +280,11 @@ async def create_complaint(
     result["sla_info"] = sla_info
 
     # Asynchronous background notification dispatch if phone & preference provided
-    if result.get("citizen_phone") and result.get("notification_preference") != "none":
+    if (
+        (channel or "").strip().lower() != "phone"
+        and result.get("citizen_phone")
+        and result.get("notification_preference") != "none"
+    ):
         notify_payload = {
             "complaint_id": result.get("complaint_id"),
             "phone_number": result.get("citizen_phone"),
