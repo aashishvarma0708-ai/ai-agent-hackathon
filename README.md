@@ -8,6 +8,36 @@ The system enforces a strict architectural boundary: **Generative AI extracts fa
 
 ---
 
+## Quick Project Overview
+
+CivicResolve AI is built as a complete civic complaint lifecycle system rather than a standalone chatbot.
+
+### Core capabilities
+- **Three intake channels:** Web Form, AI Chat, and AI Voice Callbot.
+- **Unified backend:** Every complaint reaches the same canonical FastAPI processing pipeline.
+- **Duplicate detection:** Similar reports are linked to the same primary civic issue instead of creating unnecessary active tickets.
+- **Deterministic risk & routing:** Python rules control risk scoring, department assignment, SLA logic, workflow transitions, and persistence.
+- **Secure citizen tracking:** Citizens receive cryptographically generated tracking links instead of predictable public complaint URLs.
+- **Evidence collection:** Optional photo and GPS evidence can be submitted during or after complaint registration.
+- **Citizen notifications:** SMS and WhatsApp updates can deliver complaint, evidence, and tracking information after explicit consent.
+- **Authority lifecycle:** Municipal teams can acknowledge, assign, start work, submit resolution evidence, verify completion, and reopen unresolved cases.
+
+### Live cloud architecture
+- **Frontend delivery:** Cloudflare public web layer.
+- **Core backend:** Railway-hosted FastAPI service.
+- **Voice Callbot:** Separate Railway-hosted FastAPI/WebSocket service.
+- **AI:** Groq.
+- **Real-time speech:** Deepgram STT + TTS.
+- **Telephony & messaging:** Twilio Voice, SMS, and WhatsApp.
+- **Persistence:** SQLite on persistent runtime storage.
+
+### Production services
+- **Backend API:** https://ai-agent-hackathon-production.up.railway.app
+- **Callbot / tracking / evidence service:** https://civicresolve-callbot-production.up.railway.app
+- **Frontend:** Served through the project's Cloudflare deployment.
+
+---
+
 ## Table of Contents
 
 1. [Key Features](#1-key-features)
@@ -34,6 +64,7 @@ The system enforces a strict architectural boundary: **Generative AI extracts fa
 22. [Backup & Disaster Recovery](#22-backup--disaster-recovery)
 23. [Final Expo Startup Checklist](#23-final-expo-startup-checklist)
 24. [Current Verification Status](#24-current-verification-status)
+25. [Railway + Cloudflare Deployment Guide](#25-railway--cloudflare-deployment-guide)
 
 ---
 
@@ -46,6 +77,7 @@ The system enforces a strict architectural boundary: **Generative AI extracts fa
 - **Zero-Barrier Reporting:** Evidence is always optional—complaints can be filed with purely spoken or written descriptions.
 - **Live Complaint Tracking:** Real-time timeline view of triage trace, assigned department, SLA countdown, and resolution history using Ticket IDs (`CR-YYMMDD-XXXX`).
 - **Citizen Confirmation Loop:** Review field repairs, examine resolution photos, and either confirm closure or reject/reopen the grievance.
+- **SMS & WhatsApp Updates:** Citizens can opt in to SMS, WhatsApp, or both for secure evidence and complaint-tracking links.
 
 ### AI Intelligence (Groq Multimodal & Whisper)
 - **Multimodal Fact Extraction:** Analyzes text and images using `qwen/qwen3.6-27b` and `openai/gpt-oss-20b` to extract category, severity indicators, and location facts without hallucinations.
@@ -65,7 +97,7 @@ The system enforces a strict architectural boundary: **Generative AI extracts fa
 
 ## 2. Final Complaint Lifecycle
 
-Every grievance transitions through deterministic lifecycle states managed in [`core/db.py`](file:///Users/aashishvarma/Desktop/civicresolve_ai_final/core/db.py):
+Every grievance transitions through deterministic lifecycle states managed in [`core/db.py`](core/db.py):
 
 ```
                      ┌──────────────────┐
@@ -159,7 +191,7 @@ Whether submitted through the Web Form, Conversational AI Chat, or AI Voice Call
 
 ## 4. Duplicate Detection Engine
 
-Implemented in [`core/duplicates.py`](file:///Users/aashishvarma/Desktop/civicresolve_ai_final/core/duplicates.py) and coordinated by [`core/orchestrator.py`](file:///Users/aashishvarma/Desktop/civicresolve_ai_final/core/orchestrator.py), CivicResolve uses a deterministic weighted multi-factor scoring model:
+Implemented in [`core/duplicates.py`](core/duplicates.py) and coordinated by [`core/orchestrator.py`](core/orchestrator.py), CivicResolve uses a deterministic weighted multi-factor scoring model:
 
 $$\text{Duplicate Score} = (0.50 \times \text{GeoSim}) + (0.35 \times \text{TextSim}) + (0.15 \times \text{CatSim})$$
 
@@ -191,6 +223,7 @@ CivicResolve supports multi-stage, non-destructive evidence collection:
 - **Resolution Proof Evidence:** Captured by municipal supervisors upon marking work completed.
 - **Non-Destructive Storage:** Secondary report evidence and follow-up uploads are appended to the `evidence` table; original evidence is never overwritten.
 - **Evidence is Never Mandatory:** A citizen without a camera or GPS can always register grievances via text or speech alone.
+- **Secure Tracking:** Public tracking uses cryptographic tracking tokens rather than predictable complaint IDs.
 
 ### Evidence Attachment Endpoint
 ```http
@@ -220,9 +253,9 @@ The AI Voice Callbot provides natural, low-latency phone triage using Twilio Med
       │
       ├──► [CivicResolve CallAgent (Python + Groq)]
       │         ├── 1. Safety hazard evaluation
-      │         ├── 2. Evidence permission inquiry
-      │         │       ├── If YES ──► Send Twilio SMS Link (/evidence/{token})
-      │         │       └── If NO  ──► Spoken landmark / location capture
+      │         ├── 2. Evidence / tracking permission inquiry
+      │         │       ├── If YES ──► Send secure SMS / WhatsApp links
+      │         │       └── If NO  ──► Continue without notifications
       │         ├── 3. Structured grievance verification
       │         └── 4. Real-time POST /api/complaints submission
       │
@@ -234,12 +267,14 @@ The AI Voice Callbot provides natural, low-latency phone triage using Twilio Med
 
 ### Callbot Conversation Logic
 1. **Safety First:** Inquires about immediate dangers or hazards before proceeding.
-2. **Evidence Permission:** Asks if the caller can provide photos via SMS.
-   - *If YES:* Dispatches a secure one-time link (`/evidence/{token}`) via Twilio SMS.
-   - *If NO:* Gracefully proceeds to capture verbal location landmarks.
+2. **Evidence & Tracking Permission:** Asks whether the caller wants secure evidence and tracking links.
+   - *If YES:* Dispatches secure links through the configured SMS / WhatsApp notification flow.
+   - *If NO:* Gracefully continues without requiring phone-based evidence.
 3. **Backend Submission:** Submits the structured grievance directly to `POST /api/complaints`.
 4. **Ticket Confirmation:** Reads out the registered Ticket ID to the caller.
-5. **Browser Test Phone:** WebRTC testing interface available at `/test/browser-phone` (secured by `BROWSER_TEST_SECRET`).
+5. **Natural Conversation:** Supports barge-in handling and short-answer processing for lower latency.
+6. **Automatic Hangup:** The call ends only after the final goodbye audio completes.
+7. **Browser Test Phone:** WebRTC testing interface available at `/test/browser-phone` (secured by `BROWSER_TEST_SECRET`).
 
 ---
 
@@ -287,8 +322,11 @@ civicresolve_ai_final/
 │   │   ├── civicresolve_client.py  # HTTP client to core CivicResolve backend
 │   │   ├── deepgram_stt.py         # Deepgram streaming STT client
 │   │   ├── deepgram_tts.py         # Deepgram Aura streaming TTS client
-│   │   ├── evidence_links.py       # Secure token generator for SMS evidence
+│   │   ├── evidence_links.py       # Secure token generator for evidence links
 │   │   ├── evidence_routes.py      # Mobile evidence upload UI & POST endpoints
+│   │   ├── notification_routes.py  # Internal SMS / WhatsApp notification route
+│   │   ├── tracking_routes.py      # Public secure tracking pages
+│   │   ├── whatsapp_sender.py      # Twilio WhatsApp dispatch utility
 │   │   ├── main.py                 # Callbot FastAPI service & Twilio media WebSocket
 │   │   ├── router.py               # Intent router
 │   │   └── sms_sender.py           # Twilio SMS dispatch utility
@@ -320,7 +358,9 @@ civicresolve_ai_final/
   - **Multimodal Vision:** Groq API (`qwen/qwen3.6-27b`).
   - **Speech Recognition (STT):** Groq Whisper (`whisper-large-v3-turbo`) for browser voice, Deepgram Nova-2 for phone calls.
   - **Speech Synthesis (TTS):** Deepgram Aura for real-time telephony speech synthesis.
-- **Telephony & Networking:** Twilio Voice, Twilio Media Streams (8kHz μ-law WebSocket), Twilio Programmable SMS, ngrok tunneling.
+- **Telephony & Messaging:** Twilio Voice, Twilio Media Streams (8kHz μ-law WebSocket), Twilio Programmable SMS, Twilio WhatsApp.
+- **Local Networking:** ngrok tunneling for local Twilio webhook and WSS development.
+- **Cloud Deployment:** Railway for backend/callbot services and persistent runtime; Cloudflare for the public frontend delivery layer.
 
 ---
 
@@ -335,6 +375,8 @@ civicresolve_ai_final/
   - [Deepgram Console](https://console.deepgram.com/) API Key (Required for Callbot STT/TTS).
   - [Twilio Console](https://www.twilio.com/) Account SID, Auth Token & Phone Number (Required for Callbot).
   - [ngrok](https://ngrok.com/) Account & CLI (Required for local Twilio webhook testing).
+  - Railway account for production backend/callbot deployment.
+  - Cloudflare account for the public frontend deployment/delivery layer.
 
 ---
 
@@ -415,6 +457,11 @@ VITE_API_URL=http://127.0.0.1:8000
 VITE_CALLBOT_NUMBER=+1234567890
 ```
 
+For the cloud frontend, point the build to the production Railway backend:
+```env
+VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app
+```
+
 ### 3. Callbot Environment: `callbot/.env`
 Create `callbot/.env`:
 ```bash
@@ -425,6 +472,8 @@ cp callbot/.env.example callbot/.env
 TWILIO_ACCOUNT_SID=ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 TWILIO_AUTH_TOKEN=your_twilio_auth_token_here
 TWILIO_PHONE_NUMBER=+1XXXXXXXXXX
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+WHATSAPP_SANDBOX_MODE=true
 
 # Twilio Client (For browser phone testing)
 TWILIO_API_KEY_SID=
@@ -448,7 +497,24 @@ PUBLIC_HOST=your-ngrok-subdomain.ngrok-free.app
 # Backend Connectivity
 CIVICRESOLVE_API_URL=http://127.0.0.1:8000
 PUBLIC_APP_URL=http://localhost:5173
+
+# Internal notification authentication
+NOTIFICATION_SHARED_SECRET=replace_with_a_long_random_secret
 ```
+
+### Production Railway values
+The deployed services use production URLs rather than localhost:
+```env
+# Core backend service
+NOTIFICATION_SERVICE_URL=https://civicresolve-callbot-production.up.railway.app
+
+# Callbot service
+CIVICRESOLVE_API_BASE_URL=https://ai-agent-hackathon-production.up.railway.app
+PUBLIC_APP_URL=https://civicresolve-callbot-production.up.railway.app
+PUBLIC_HOST=civicresolve-callbot-production.up.railway.app
+```
+
+> Keep `NOTIFICATION_SHARED_SECRET` identical on the backend and callbot services, but never commit its value.
 
 ---
 
@@ -506,6 +572,9 @@ To route inbound voice calls to your local Callbot:
 7. Click **Save Configuration**.
 8. Call your Twilio Phone Number from any mobile device to interact with the AI assistant.
 
+### WhatsApp Sandbox for development / expo testing
+For Twilio WhatsApp Sandbox testing, each test phone must separately join the sandbox before receiving free-form WhatsApp messages. The sandbox is for development/testing; a production rollout should use an approved WhatsApp sender and appropriate templates.
+
 ---
 
 ## 14. Authority & Admin Authentication
@@ -531,7 +600,7 @@ CivicResolve supports multi-admin authentication configured via environment vari
 
 CivicResolve uses SQLite (`civicresolve.db`) for lightweight, zero-configuration local persistence:
 
-- **Schema Management:** Handled automatically on application startup via `init_db()` in [`core/db.py`](file:///Users/aashishvarma/Desktop/civicresolve_ai_final/core/db.py), including safe column migrations.
+- **Schema Management:** Handled automatically on application startup via `init_db()` in [`core/db.py`](core/db.py), including safe column migrations.
 - **Data Tables:**
   - `complaints`: Primary grievance records, SLA deadlines, risk metrics, and triage traces.
   - `status_history`: Complete audit trail of every status transition and authority note.
@@ -556,6 +625,7 @@ python scripts/clear_demo_data.py
 | `POST` | `/api/admin/login` | Authority authentication with constant-time verification. |
 | `POST` | `/api/complaints` | Canonical intake endpoint (supports JSON & multipart with image). |
 | `GET` | `/api/complaints/{id}` | Fetches detailed complaint object, history, evidence, and SLA status. |
+| `GET` | `/api/public/track/{tracking_token}` | Citizen-safe secure tracking data. |
 | `POST` | `/api/complaints/{id}/evidence` | Attaches citizen photos (up to 8MB) and confirmed GPS coordinates. |
 | `POST` | `/api/complaints/{id}/citizen-confirmation` | Citizen closure confirmation or rejection/reopen request. |
 | `GET` | `/api/admin/complaints` | Retrieves all complaints for the Authority Command Center. |
@@ -566,6 +636,8 @@ python scripts/clear_demo_data.py
 | `POST` | `/api/admin/run-sla-check` | Batch evaluation of all open complaints for SLA escalations. |
 | `GET` | `/api/admin/analytics` | Aggregated municipal KPIs, department stats, and hotspot clusters. |
 | `POST` | `/api/voice/transcribe` | Groq Whisper speech-to-text transcription endpoint. |
+| `POST` | `/internal/notify` | Internal authenticated SMS / WhatsApp notification service on the callbot deployment. |
+| `GET` | `/track/{tracking_token}` | Public tracking page served by the callbot/tracking service. |
 
 ---
 
@@ -579,7 +651,9 @@ cd ~/Desktop/civicresolve_ai_final
 source .venv/bin/activate
 PYTHONPATH=. python -m pytest tests -q
 ```
-*Expected Baseline Result:* `15 passed in ~50s`
+*Earlier documented baseline:* `15 passed in ~50s`
+
+*Latest verified full project suite:* `39 passed` when run with the project root and required Callbot import path/environment configured.
 
 ### 2. Python Compilation Check
 ```bash
@@ -615,10 +689,12 @@ python -m py_compile app/*.py
 - [ ] Upload a test JPEG/PNG photo and capture browser GPS.
 - [ ] Verify Ticket ID generation (`CR-YYMMDD-XXXX`) and immediate routing to Roads & Infrastructure Department.
 - [ ] Confirm Civic Risk Score is classified as `HIGH` or `CRITICAL` due to school proximity.
+- [ ] If a phone number is provided, test SMS / WhatsApp notification preference and secure tracking delivery.
 
 ### 3. Duplicate Detection Verification
 - [ ] Submit a second complaint with similar text and location within 300 meters.
 - [ ] Verify the system identifies the duplicate, links it as a supporting report, increments `report_count`, and returns the existing primary Ticket ID.
+- [ ] Verify the supporting reporter can still receive a valid secure tracking token / notification when opted in.
 
 ### 4. Conversational AI Chat Intake
 - [ ] Open AI Chat and type a civic issue (*"Streetlight pole sparking near market"*).
@@ -627,9 +703,12 @@ python -m py_compile app/*.py
 
 ### 5. Callbot Telephony Flow
 - [ ] Call the Twilio number; verify Deepgram STT transcription.
-- [ ] Answer safety question; confirm evidence permission inquiry.
-- [ ] Request SMS link $\rightarrow$ verify Twilio SMS receipt $\rightarrow$ open `/evidence/{token}` $\rightarrow$ upload photo.
-- [ ] Verify complaint appears in Authority Dashboard with attached evidence.
+- [ ] Answer safety question; confirm evidence / tracking permission inquiry.
+- [ ] Request links and verify SMS delivery.
+- [ ] If the WhatsApp Sandbox test window is active, verify WhatsApp delivery as well.
+- [ ] Open the evidence and tracking links.
+- [ ] Verify complaint appears in Authority Dashboard with the same production backend data.
+- [ ] Verify final goodbye playback and automatic call hangup.
 
 ### 6. Authority Lifecycle & AI Verification
 - [ ] Log in via Authority Dashboard (`ADMIN_EMAIL` / `ADMIN_PASSWORD`).
@@ -661,53 +740,126 @@ source .venv/bin/activate
 PYTHONPATH=. python -m pytest tests -q
 ```
 
+If tests import `callbot.app.main`, include the Callbot root as well:
+```bash
+PYTHONPATH="$PWD:$PWD/callbot" python -m pytest tests -q
+```
+
 ### 3. Callbot Fails to Connect / Silent Call
-- **Stale ngrok URL:** Ensure `PUBLIC_HOST` in `callbot/.env` matches your active ngrok domain without `https://`.
-- **Backend Unreachable:** Verify Core Backend is running on `http://127.0.0.1:8000`.
-- **Missing API Keys:** Verify `DEEPGRAM_API_KEY` and `GROQ_API_KEY` in `callbot/.env`.
+- **Local development:** Ensure `PUBLIC_HOST` in `callbot/.env` matches your active ngrok domain without `https://`.
+- **Production:** Ensure Twilio points to `https://civicresolve-callbot-production.up.railway.app/voice`.
+- **Backend Unreachable:** Verify `CIVICRESOLVE_API_BASE_URL` points to the Railway backend in production.
+- **Missing API Keys:** Verify `DEEPGRAM_API_KEY` and `GROQ_API_KEY` in the Callbot service environment.
 
 ### 4. Frontend Cannot Connect to Backend
-- Confirm `VITE_API_URL=http://127.0.0.1:8000` in `frontend/.env`.
-- Restart the Vite development server (`npm run dev`).
+- **Local:** Confirm `VITE_API_URL=http://127.0.0.1:8000` in `frontend/.env`.
+- **Production:** Build the Cloudflare-hosted frontend with `VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app`.
+- Restart/redeploy the frontend whenever the Vite environment value changes, because Vite injects `VITE_*` values at build time.
+
+### 5. WhatsApp Accepted but Not Delivered
+- A Twilio `accepted` message is not the same as final delivery.
+- During Sandbox testing, ensure the test phone has joined the sandbox and is inside the allowed customer-service window for free-form messages.
+- Inspect the final Twilio message status and error code when delivery fails.
 
 ---
 
 ## 20. Production & Expo Deployment Architecture
 
-```
-                      ┌─────────────────────────┐
-                      │    Internet / Users     │
-                      └────────────┬────────────┘
-                                   │ HTTPS
-                                   ▼
-                      ┌─────────────────────────┐
-                      │  React SPA (Vite / CDN) │
-                      └────────────┬────────────┘
-                                   │ API Requests
-                                   ▼
-                      ┌─────────────────────────┐
-                      │ FastAPI Backend Service │
-                      └────────────┬────────────┘
-                                   │ Local Read/Write
-                                   ▼
-                      ┌─────────────────────────┐
-                      │   Persistent Disk /     │
-                      │      SQLite DB          │
-                      └─────────────────────────┘
+CivicResolve uses a split cloud architecture so the public web experience, backend processing, and real-time telephony service can scale and be managed independently.
 
-   ┌───────────────────┐               ┌─────────────────────────┐
-   │  Twilio Telecom   │◄─────────────►│ FastAPI Callbot Service │
-   │  (Voice & SMS)    │  WSS / HTTPS  │   (Deepgram + Groq)     │
-   └───────────────────┘               └────────────┬────────────┘
-                                                    │ REST API
-                                                    ▼
-                                       [FastAPI Backend Service]
 ```
+                           ┌────────────────────────────┐
+                           │        Citizens            │
+                           │ Web • Chat • Phone • Track │
+                           └─────────────┬──────────────┘
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    │                                         │
+                    ▼                                         ▼
+        ┌────────────────────────┐                ┌────────────────────────┐
+        │ Cloudflare Web Layer   │                │     Twilio Telecom     │
+        │ React + Vite Frontend  │                │ Voice • SMS • WhatsApp │
+        └────────────┬───────────┘                └────────────┬───────────┘
+                     │ HTTPS API                               │ HTTPS / WSS
+                     ▼                                         ▼
+        ┌────────────────────────┐                ┌────────────────────────┐
+        │ Railway Core Backend   │◄──────────────►│ Railway Callbot        │
+        │ FastAPI + Groq + Rules │     REST       │ FastAPI + WebSocket    │
+        └────────────┬───────────┘                │ Deepgram + Groq        │
+                     │                            │ Tracking + Evidence     │
+                     │                            └────────────┬───────────┘
+                     ▼                                         │
+        ┌────────────────────────┐                             │
+        │ Persistent SQLite Data │                             │
+        │ Complaints + History   │                             │
+        └────────────────────────┘                             │
+                                                               ▼
+                                                    Secure citizen links
+```
+
+### Railway deployment
+Railway hosts the stateful Python services used by CivicResolve:
+
+#### Core backend service
+`https://ai-agent-hackathon-production.up.railway.app`
+
+Responsibilities:
+- `POST /api/complaints` canonical intake
+- Groq-based complaint understanding
+- Deterministic duplicate detection
+- Risk, priority, routing, and SLA logic
+- Complaint lifecycle and admin APIs
+- SQLite persistence through the configured production volume
+- Citizen-safe tracking API
+
+#### Callbot / notification / tracking service
+`https://civicresolve-callbot-production.up.railway.app`
+
+Responsibilities:
+- Twilio `/voice` webhook
+- Bidirectional `/media-stream` WebSocket
+- Deepgram STT and TTS connections
+- Groq-powered conversational call agent
+- Secure evidence pages
+- Secure tracking pages
+- Internal `/internal/notify` service
+- Twilio SMS and WhatsApp dispatch
+
+### Cloudflare deployment
+Cloudflare is used as the public-facing web delivery layer for the React/Vite frontend.
+
+The production frontend is built with:
+```env
+VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app
+```
+
+This keeps the browser UI independent from localhost and ensures that Web Form, AI Chat, tracking, and the Authority Dashboard all read/write through the same Railway production backend used by the Callbot.
+
+### Why the deployment is split
+- **Cloudflare** serves the public web experience efficiently over HTTPS.
+- **Railway Backend** handles AI processing, deterministic civic rules, API requests, and persistent complaint data.
+- **Railway Callbot** maintains long-lived WebSocket/audio connections needed for Twilio + Deepgram real-time voice.
+- **Twilio** handles carrier-grade telephony and messaging.
+- **Groq + Deepgram** provide AI reasoning and real-time speech services without coupling those responsibilities to the frontend.
+
+### Deployment rule that prevents split databases
+All production channels must use the same backend URL:
+
+```text
+Web Form ───────┐
+AI Chat ────────┤
+Authority UI ───┼──► https://ai-agent-hackathon-production.up.railway.app
+Callbot ────────┘
+```
+
+If the frontend is accidentally built with `VITE_API_URL=http://127.0.0.1:8000`, the browser reads the local database while the Callbot writes to Railway. Always use the Railway API URL for the Cloudflare production build.
 
 ### Key Production Requirements
-1. **Persistent Volume for SQLite:** Ephemeral containers (like basic serverless functions) will reset SQLite data on restart. Mount a persistent volume for `civicresolve.db`.
-2. **Reverse Proxy & SSL:** Terminate TLS using Nginx or Caddy with valid SSL certificates for HTTPS and WSS endpoints.
-3. **Environment Security:** Configure production secrets directly in server environment managers—never push `.env` files to source repositories.
+1. **Persistent Volume for SQLite:** Ephemeral containers can reset local SQLite data on restart. Mount persistent runtime storage for `civicresolve.db`.
+2. **HTTPS / WSS:** Production voice requires publicly reachable HTTPS and secure WebSocket endpoints. Railway provides the public callbot host used by Twilio.
+3. **Environment Security:** Configure production secrets directly in Railway/Cloudflare environment settings—never push `.env` files to source repositories.
+4. **Shared Notification Secret:** Backend and Callbot must use the same private `NOTIFICATION_SHARED_SECRET`.
+5. **Frontend API Consistency:** The Cloudflare frontend build must point to the Railway backend via `VITE_API_URL`.
 
 ---
 
@@ -717,7 +869,9 @@ PYTHONPATH=. python -m pytest tests -q
 - [x] **No Hardcoded Secrets:** API keys and admin credentials exist solely in runtime environment configurations.
 - [x] **Timing-Attack Protection:** Admin authentication utilizes constant-time `secrets.compare_digest`.
 - [x] **Safe Media Validation:** Evidence endpoint enforces file size bounds ($\le 8\text{MB}$) and MIME whitelisting (`image/jpeg`, `image/png`, `image/webp`).
-- [x] **Token Randomization:** Session tokens use cryptographically secure entropy (`secrets.token_hex(16)`).
+- [x] **Token Randomization:** Session / tracking tokens use cryptographically secure entropy.
+- [x] **Internal Notification Authentication:** `/internal/notify` is protected with a shared secret between services.
+- [x] **WhatsApp Consent:** WhatsApp notifications require explicit opt-in in the citizen flow.
 - [x] **Credential Rotation:** Rotate development Twilio, Groq, and Deepgram tokens prior to public expo presentations.
 
 ---
@@ -746,7 +900,22 @@ tar --exclude='.venv' \
 
 ## 23. Final Expo Startup Checklist
 
-Follow this quick sequence to bring the entire platform live for presentations:
+### Production-first expo check
+Because CivicResolve is now cloud deployed, the expo can primarily use the hosted services:
+
+1. Verify Railway backend responds.
+2. Verify Railway Callbot `/health` responds.
+3. Verify the Cloudflare frontend is built against the Railway API URL.
+4. Open the Authority Dashboard and confirm it displays production complaints.
+5. Submit one Web / Chat test complaint.
+6. Verify secure tracking.
+7. For voice demo, verify Twilio points to the Railway Callbot `/voice` webhook.
+8. For WhatsApp Sandbox demos, ensure the test phone has joined the sandbox shortly before the demo.
+9. Make one live Callbot complaint and confirm SMS / WhatsApp delivery.
+10. Show the complaint in the same Authority Dashboard.
+
+### Local fallback startup
+The original local demo path remains available:
 
 1. **Activate Backend:** `source .venv/bin/activate && python -m uvicorn backend.main:app --port 8000`
 2. **Activate Frontend:** `cd frontend && npm run dev`
@@ -763,11 +932,153 @@ Follow this quick sequence to bring the entire platform live for presentations:
 
 ## 24. Current Verification Status
 
-- **Automated Tests:** `15 / 15` tests passing in `tests/` (`test_core.py`, `test_e2e_workflow_actions.py`, `test_resolution_workflow.py`, `test_voice_pipeline.py`).
+- **Earlier Automated-Test Baseline:** `15 / 15` tests passing in the original documented suite.
+- **Latest Full Automated Test Run:** `39 passed` in the expanded project test suite.
 - **Frontend Build:** Production bundle compiled successfully with Vite 5.
-- **Python Compilation:** Zero syntax or import errors across all backend and callbot modules.
+- **Python Compilation:** Backend and modified production modules passed syntax compilation checks during verification.
+- **Groq Production AI:** Production complaint analysis successfully returns `HTTP 200` and structured municipal classifications.
+- **Production Notifications:** SMS and WhatsApp dispatch paths verified; WhatsApp Sandbox delivery depends on the active Sandbox/customer-service test window.
+- **Secure Tracking:** Production tracking tokens and public tracking pages verified.
+- **Duplicate Reporter Notifications:** Supporting duplicate reporters receive secure tracking while the primary complaint remains the source issue.
+- **Production Backend:** Railway backend online and used by Web, Chat, Voice, and Authority flows.
+- **Production Callbot:** Railway voice service successfully handles Twilio WebSocket audio, Deepgram STT/TTS, complaint registration, final goodbye, and automatic hangup.
 - **Database Engine:** SQLite 3 with automatic schema initialization and non-destructive column migrations.
 - **Multi-Admin Authentication:** Constant-time verification active for primary and secondary administrators.
+
+---
+
+## 25. Railway + Cloudflare Deployment Guide
+
+This section documents how CivicResolve is deployed for the hosted demo / expo environment.
+
+### A. Railway — Core Backend
+
+From the repository root, link the project/service in Railway and configure the backend service with the required secrets and runtime variables.
+
+Production service:
+```text
+https://ai-agent-hackathon-production.up.railway.app
+```
+
+Important backend production variables include:
+```env
+GROQ_API_KEY=<secret>
+NOTIFICATION_SERVICE_URL=https://civicresolve-callbot-production.up.railway.app
+NOTIFICATION_SHARED_SECRET=<same-secret-as-callbot>
+ADMIN_EMAIL=<secret>
+ADMIN_PASSWORD=<secret>
+```
+
+Deploy the backend from the local project using the Railway CLI:
+```bash
+railway up \
+  --service ai-agent-hackathon \
+  --environment production
+```
+
+### B. Railway — Callbot / Notifications
+
+The Callbot is deployed as a separate Railway service because it handles Twilio webhooks, secure WebSocket audio streams, Deepgram streaming connections, tracking pages, evidence pages, and notifications.
+
+Production service:
+```text
+https://civicresolve-callbot-production.up.railway.app
+```
+
+Typical production variables include:
+```env
+CIVICRESOLVE_API_BASE_URL=https://ai-agent-hackathon-production.up.railway.app
+PUBLIC_HOST=civicresolve-callbot-production.up.railway.app
+PUBLIC_APP_URL=https://civicresolve-callbot-production.up.railway.app
+DEEPGRAM_API_KEY=<secret>
+GROQ_API_KEY=<secret>
+TWILIO_ACCOUNT_SID=<secret>
+TWILIO_AUTH_TOKEN=<secret>
+TWILIO_PHONE_NUMBER=<twilio-number>
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+WHATSAPP_SANDBOX_MODE=true
+NOTIFICATION_SHARED_SECRET=<same-secret-as-backend>
+```
+
+Deploy:
+```bash
+railway up \
+  --service civicresolve-callbot \
+  --environment production
+```
+
+Twilio Voice should point its incoming call webhook to:
+```text
+https://civicresolve-callbot-production.up.railway.app/voice
+```
+
+The Callbot then creates the secure media-stream URL internally:
+```text
+wss://civicresolve-callbot-production.up.railway.app/media-stream
+```
+
+### C. Cloudflare — Frontend
+
+The React/Vite frontend is deployed through Cloudflare as the public web layer.
+
+Before the production frontend build, configure:
+```env
+VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app
+```
+
+Build command:
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+Vite generates the production frontend bundle in:
+```text
+frontend/dist/
+```
+
+Deploy that production output through the configured Cloudflare web deployment. The frontend then communicates with the Railway API over HTTPS.
+
+### D. End-to-End Hosted Flow
+
+```text
+Citizen opens Cloudflare frontend
+            │
+            ▼
+React/Vite UI
+            │ HTTPS
+            ▼
+Railway FastAPI Backend
+            │
+            ├── Groq AI
+            ├── SQLite
+            ├── Duplicate / Risk / SLA Engine
+            └── Railway Callbot Notification Service
+                         │
+                         ├── Twilio SMS
+                         ├── Twilio WhatsApp
+                         └── Tracking / Evidence links
+
+Citizen calls Twilio number
+            │
+            ▼
+Railway Callbot (WSS)
+            │
+            ├── Deepgram STT/TTS
+            ├── Groq conversation logic
+            └── Railway Core Backend
+```
+
+### E. Deployment Safety Rules
+
+- Never commit `.env` files or live API keys.
+- Do not use localhost URLs in a production Cloudflare build.
+- Use the same Railway backend URL for Web Form, Chat, Authority Dashboard, and Callbot.
+- Keep the backend and Callbot `NOTIFICATION_SHARED_SECRET` identical.
+- Use persistent storage for the production SQLite database.
+- Rebuild/redeploy the frontend after changing `VITE_API_URL`.
+- Treat the Twilio WhatsApp Sandbox as an expo/testing setup; a public deployment should use a production WhatsApp sender configuration.
 
 ---
 
