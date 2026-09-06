@@ -6,6 +6,8 @@ CivicResolve AI is an AI-assisted civic grievance and resolution platform design
 
 The system enforces a strict architectural boundary: **Generative AI extracts facts and interprets multimodal unstructured inputs, while deterministic Python code controls business logic, state transitions, risk scores, SLAs, department routing, and database transactions.**
 
+**Live Frontend:** https://civicresolve-ai.pages.dev/
+
 ---
 
 ## Quick Project Overview
@@ -23,7 +25,7 @@ CivicResolve AI is built as a complete civic complaint lifecycle system rather t
 - **Authority lifecycle:** Municipal teams can acknowledge, assign, start work, submit resolution evidence, verify completion, and reopen unresolved cases.
 
 ### Live cloud architecture
-- **Frontend delivery:** Cloudflare public web layer.
+- **Frontend delivery:** Cloudflare Pages public web layer.
 - **Core backend:** Railway-hosted FastAPI service.
 - **Voice Callbot:** Separate Railway-hosted FastAPI/WebSocket service.
 - **AI:** Groq.
@@ -32,9 +34,9 @@ CivicResolve AI is built as a complete civic complaint lifecycle system rather t
 - **Persistence:** SQLite on persistent runtime storage.
 
 ### Production services
+- **Frontend:** https://civicresolve-ai.pages.dev/
 - **Backend API:** https://ai-agent-hackathon-production.up.railway.app
 - **Callbot / tracking / evidence service:** https://civicresolve-callbot-production.up.railway.app
-- **Frontend:** Served through the project's Cloudflare deployment.
 
 ---
 
@@ -360,7 +362,7 @@ civicresolve_ai_final/
   - **Speech Synthesis (TTS):** Deepgram Aura for real-time telephony speech synthesis.
 - **Telephony & Messaging:** Twilio Voice, Twilio Media Streams (8kHz μ-law WebSocket), Twilio Programmable SMS, Twilio WhatsApp.
 - **Local Networking:** ngrok tunneling for local Twilio webhook and WSS development.
-- **Cloud Deployment:** Railway for backend/callbot services and persistent runtime; Cloudflare for the public frontend delivery layer.
+- **Cloud Deployment:** Railway for backend/callbot services and persistent runtime; Cloudflare Pages for the public frontend at `https://civicresolve-ai.pages.dev/`.
 
 ---
 
@@ -457,7 +459,7 @@ VITE_API_URL=http://127.0.0.1:8000
 VITE_CALLBOT_NUMBER=+1234567890
 ```
 
-For the cloud frontend, point the build to the production Railway backend:
+For the Cloudflare Pages production frontend (`https://civicresolve-ai.pages.dev/`), point the build to the production Railway backend:
 ```env
 VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app
 ```
@@ -753,7 +755,7 @@ PYTHONPATH="$PWD:$PWD/callbot" python -m pytest tests -q
 
 ### 4. Frontend Cannot Connect to Backend
 - **Local:** Confirm `VITE_API_URL=http://127.0.0.1:8000` in `frontend/.env`.
-- **Production:** Build the Cloudflare-hosted frontend with `VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app`.
+- **Production:** Build the Cloudflare Pages frontend at `https://civicresolve-ai.pages.dev/` with `VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app`.
 - Restart/redeploy the frontend whenever the Vite environment value changes, because Vite injects `VITE_*` values at build time.
 
 ### 5. WhatsApp Accepted but Not Delivered
@@ -777,24 +779,22 @@ CivicResolve uses a split cloud architecture so the public web experience, backe
                     │                                         │
                     ▼                                         ▼
         ┌────────────────────────┐                ┌────────────────────────┐
-        │ Cloudflare Web Layer   │                │     Twilio Telecom     │
+        │ Cloudflare Pages       │                │     Twilio Telecom     │
         │ React + Vite Frontend  │                │ Voice • SMS • WhatsApp │
-        └────────────┬───────────┘                └────────────┬───────────┘
-                     │ HTTPS API                               │ HTTPS / WSS
-                     ▼                                         ▼
-        ┌────────────────────────┐                ┌────────────────────────┐
-        │ Railway Core Backend   │◄──────────────►│ Railway Callbot        │
-        │ FastAPI + Groq + Rules │     REST       │ FastAPI + WebSocket    │
-        └────────────┬───────────┘                │ Deepgram + Groq        │
-                     │                            │ Tracking + Evidence     │
-                     │                            └────────────┬───────────┘
-                     ▼                                         │
-        ┌────────────────────────┐                             │
-        │ Persistent SQLite Data │                             │
-        │ Complaints + History   │                             │
-        └────────────────────────┘                             │
-                                                               ▼
-                                                    Secure citizen links
+        │ civicresolve-ai.pages  │                └────────────┬───────────┘
+        └────────────┬───────────┘                             │ HTTPS / WSS
+                     │ HTTPS API                               ▼
+                     ▼                           ┌────────────────────────┐
+        ┌────────────────────────┐              │ Railway Callbot        │
+        │ Railway Core Backend   │◄────────────►│ FastAPI + WebSocket    │
+        │ FastAPI + Groq + Rules │     REST     │ Deepgram + Groq        │
+        └────────────┬───────────┘              │ Tracking + Evidence     │
+                     │                          └────────────┬───────────┘
+                     ▼                                       │
+        ┌────────────────────────┐                           ▼
+        │ Persistent SQLite Data │                Secure citizen links
+        │ Complaints + History   │
+        └────────────────────────┘
 ```
 
 ### Railway deployment
@@ -825,8 +825,10 @@ Responsibilities:
 - Internal `/internal/notify` service
 - Twilio SMS and WhatsApp dispatch
 
-### Cloudflare deployment
-Cloudflare is used as the public-facing web delivery layer for the React/Vite frontend.
+### Cloudflare Pages deployment
+Cloudflare Pages is used as the public-facing web delivery layer for the React/Vite frontend.
+
+**Live frontend:** `https://civicresolve-ai.pages.dev/`
 
 The production frontend is built with:
 ```env
@@ -836,7 +838,7 @@ VITE_API_URL=https://ai-agent-hackathon-production.up.railway.app
 This keeps the browser UI independent from localhost and ensures that Web Form, AI Chat, tracking, and the Authority Dashboard all read/write through the same Railway production backend used by the Callbot.
 
 ### Why the deployment is split
-- **Cloudflare** serves the public web experience efficiently over HTTPS.
+- **Cloudflare Pages** serves the public web experience efficiently over HTTPS.
 - **Railway Backend** handles AI processing, deterministic civic rules, API requests, and persistent complaint data.
 - **Railway Callbot** maintains long-lived WebSocket/audio connections needed for Twilio + Deepgram real-time voice.
 - **Twilio** handles carrier-grade telephony and messaging.
@@ -846,20 +848,23 @@ This keeps the browser UI independent from localhost and ensures that Web Form, 
 All production channels must use the same backend URL:
 
 ```text
-Web Form ───────┐
-AI Chat ────────┤
-Authority UI ───┼──► https://ai-agent-hackathon-production.up.railway.app
-Callbot ────────┘
+Cloudflare Frontend (https://civicresolve-ai.pages.dev/)
+        │
+        ├── Web Form ───────┐
+        ├── AI Chat ────────┤
+        └── Authority UI ───┼──► https://ai-agent-hackathon-production.up.railway.app
+                            │
+Callbot ────────────────────┘
 ```
 
-If the frontend is accidentally built with `VITE_API_URL=http://127.0.0.1:8000`, the browser reads the local database while the Callbot writes to Railway. Always use the Railway API URL for the Cloudflare production build.
+If the frontend is accidentally built with `VITE_API_URL=http://127.0.0.1:8000`, the browser reads the local database while the Callbot writes to Railway. Always use the Railway API URL for the Cloudflare Pages production build.
 
 ### Key Production Requirements
 1. **Persistent Volume for SQLite:** Ephemeral containers can reset local SQLite data on restart. Mount persistent runtime storage for `civicresolve.db`.
 2. **HTTPS / WSS:** Production voice requires publicly reachable HTTPS and secure WebSocket endpoints. Railway provides the public callbot host used by Twilio.
 3. **Environment Security:** Configure production secrets directly in Railway/Cloudflare environment settings—never push `.env` files to source repositories.
 4. **Shared Notification Secret:** Backend and Callbot must use the same private `NOTIFICATION_SHARED_SECRET`.
-5. **Frontend API Consistency:** The Cloudflare frontend build must point to the Railway backend via `VITE_API_URL`.
+5. **Frontend API Consistency:** The Cloudflare Pages frontend build must point to the Railway backend via `VITE_API_URL`.
 
 ---
 
@@ -903,16 +908,16 @@ tar --exclude='.venv' \
 ### Production-first expo check
 Because CivicResolve is now cloud deployed, the expo can primarily use the hosted services:
 
-1. Verify Railway backend responds.
-2. Verify Railway Callbot `/health` responds.
-3. Verify the Cloudflare frontend is built against the Railway API URL.
-4. Open the Authority Dashboard and confirm it displays production complaints.
-5. Submit one Web / Chat test complaint.
-6. Verify secure tracking.
-7. For voice demo, verify Twilio points to the Railway Callbot `/voice` webhook.
-8. For WhatsApp Sandbox demos, ensure the test phone has joined the sandbox shortly before the demo.
-9. Make one live Callbot complaint and confirm SMS / WhatsApp delivery.
-10. Show the complaint in the same Authority Dashboard.
+1. Open the live frontend: `https://civicresolve-ai.pages.dev/`.
+2. Verify Railway backend responds.
+3. Verify Railway Callbot `/health` responds.
+4. Verify the Cloudflare Pages frontend is built against the Railway API URL.
+5. Open the Authority Dashboard and confirm it displays production complaints.
+6. Submit one Web / Chat test complaint.
+7. Verify secure tracking.
+8. For voice demo, verify Twilio points to the Railway Callbot `/voice` webhook.
+9. For WhatsApp Sandbox demos, ensure the test phone has joined the sandbox shortly before the demo.
+10. Make one live Callbot complaint and confirm SMS / WhatsApp delivery, then show it in the same Authority Dashboard.
 
 ### Local fallback startup
 The original local demo path remains available:
@@ -935,6 +940,7 @@ The original local demo path remains available:
 - **Earlier Automated-Test Baseline:** `15 / 15` tests passing in the original documented suite.
 - **Latest Full Automated Test Run:** `39 passed` in the expanded project test suite.
 - **Frontend Build:** Production bundle compiled successfully with Vite 5.
+- **Live Frontend:** Cloudflare Pages deployment available at `https://civicresolve-ai.pages.dev/`.
 - **Python Compilation:** Backend and modified production modules passed syntax compilation checks during verification.
 - **Groq Production AI:** Production complaint analysis successfully returns `HTTP 200` and structured municipal classifications.
 - **Production Notifications:** SMS and WhatsApp dispatch paths verified; WhatsApp Sandbox delivery depends on the active Sandbox/customer-service test window.
@@ -1017,9 +1023,14 @@ The Callbot then creates the secure media-stream URL internally:
 wss://civicresolve-callbot-production.up.railway.app/media-stream
 ```
 
-### C. Cloudflare — Frontend
+### C. Cloudflare Pages — Frontend
 
-The React/Vite frontend is deployed through Cloudflare as the public web layer.
+The React/Vite frontend is deployed through Cloudflare Pages as the public web layer.
+
+**Production frontend:**
+```text
+https://civicresolve-ai.pages.dev/
+```
 
 Before the production frontend build, configure:
 ```env
@@ -1038,15 +1049,15 @@ Vite generates the production frontend bundle in:
 frontend/dist/
 ```
 
-Deploy that production output through the configured Cloudflare web deployment. The frontend then communicates with the Railway API over HTTPS.
+Deploy that production output through Cloudflare Pages. The frontend at `https://civicresolve-ai.pages.dev/` then communicates with the Railway API over HTTPS.
 
 ### D. End-to-End Hosted Flow
 
 ```text
-Citizen opens Cloudflare frontend
+Citizen opens https://civicresolve-ai.pages.dev/
             │
             ▼
-React/Vite UI
+Cloudflare Pages — React/Vite UI
             │ HTTPS
             ▼
 Railway FastAPI Backend
@@ -1073,7 +1084,7 @@ Railway Callbot (WSS)
 ### E. Deployment Safety Rules
 
 - Never commit `.env` files or live API keys.
-- Do not use localhost URLs in a production Cloudflare build.
+- Do not use localhost URLs in a production Cloudflare Pages build.
 - Use the same Railway backend URL for Web Form, Chat, Authority Dashboard, and Callbot.
 - Keep the backend and Callbot `NOTIFICATION_SHARED_SECRET` identical.
 - Use persistent storage for the production SQLite database.
