@@ -79,11 +79,11 @@ async def trigger_citizen_notification(payload: dict):
 
 # Configure CORS
 origins = [
+    "https://civicresolve-ai.pages.dev",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "*",
 ]
 
 app.add_middleware(
@@ -522,12 +522,9 @@ async def attach_citizen_evidence(
     location_confirmed: bool = Form(False),
 ):
     """
-    Attach optional citizen photo and/or confirmed browser GPS
-    to an already-existing complaint.
-
-    This never creates a new complaint.
+    Attach optional citizen evidence to an existing complaint
+    without creating a second complaint.
     """
-
     complaint = get_complaint(complaint_id)
 
     if not complaint:
@@ -548,10 +545,6 @@ async def attach_citizen_evidence(
     image_url = None
     image_saved = False
     location_saved = False
-
-    # -----------------------------------------------------
-    # OPTIONAL PHOTO
-    # -----------------------------------------------------
 
     if image:
         allowed_types = {
@@ -610,10 +603,6 @@ async def attach_citizen_evidence(
         )
 
         image_saved = True
-
-    # -----------------------------------------------------
-    # OPTIONAL CONFIRMED GPS
-    # -----------------------------------------------------
 
     if (
         latitude is not None
@@ -700,10 +689,6 @@ async def attach_citizen_evidence(
 
             location_saved = True
 
-    # -----------------------------------------------------
-    # UPDATE INITIAL PHOTO FIELD
-    # -----------------------------------------------------
-
     if image_url:
         update_initial_evidence(
             complaint_id=complaint_id,
@@ -756,12 +741,12 @@ def run_sla_check():
         if c.get("domain") == "municipal" and c.get("status") not in {"CLOSED", "RESOLUTION_SUBMITTED", "RESOLVED_PENDING_CITIZEN"}:
             sla_info = evaluate_sla_state(c)
             cid = c["complaint_id"]
-            
+
             if sla_info["is_breached"]:
                 breached_count += 1
                 curr_level = c.get("escalation_level", 0) or 0
                 new_level = min(3, curr_level + 1)
-                
+
                 if new_level > curr_level:
                     record_escalation(
                         complaint_id=cid,
@@ -792,7 +777,6 @@ def simulate_time(complaint_id: str, payload: Optional[SimulateTimeRequest] = Bo
     if not updated:
         raise HTTPException(status_code=404, detail="Complaint ID not found.")
 
-    # Evaluate SLA after simulation
     sla_info = evaluate_sla_state(updated)
     if sla_info["is_breached"]:
         curr_level = updated.get("escalation_level", 0) or 0
@@ -823,13 +807,12 @@ async def verify_resolution(
 
     img_bytes = None
     final_res_url = resolution_image_url or ""
-    
+
     if resolution_image:
         img_bytes = await resolution_image.read()
         b64 = base64.b64encode(img_bytes).decode("utf-8")
         final_res_url = f"data:{resolution_image.content_type or 'image/jpeg'};base64,{b64}"
 
-    # Perform AI Resolution Verification
     verification = verify_resolution_evidence(
         complaint_category=complaint.get("category", "roads"),
         complaint_text=complaint.get("complaint_text", ""),
@@ -864,19 +847,19 @@ async def voice_transcribe(
 
         filename = audio.filename or "voice.webm"
         content_type = audio.content_type or "audio/webm"
-        
+
         print("VOICE LANGUAGE SELECTED:", language, flush=True)
         print("AUDIO MIME:", content_type, flush=True)
         print("AUDIO SIZE:", len(audio_bytes), flush=True)
-        
+
         logger.info(
             f"Received voice transcription request: filename='{filename}', content_type='{content_type}', bytes={len(audio_bytes)}, language='{language}'"
         )
 
         audio_stream = io.BytesIO(audio_bytes)
         transcription = transcribe_audio(
-            audio_stream, 
-            filename=filename, 
+            audio_stream,
+            filename=filename,
             language=language
         )
         return transcription
@@ -891,10 +874,10 @@ async def voice_transcribe(
 @app.get("/api/admin/analytics")
 def get_analytics():
     """
-    Aggregates municipal command center analytics, department KPIs, and geographic hotspots.
+    Aggregates executive analytics, department performance, and geographic hotspots.
     """
     complaints = list_complaints(limit=300)
-    
+
     total = len(complaints)
     municipal = [c for c in complaints if c.get("domain") == "municipal"]
     open_cases = [c for c in municipal if c.get("status") not in {"CLOSED", "REJECTED"}]
@@ -918,7 +901,7 @@ def get_analytics():
         dept = c.get("department") or "General Works"
         if dept not in dept_stats:
             dept_stats[dept] = {"total": 0, "open": 0, "resolved": 0, "breached": 0, "total_sla_hours": 0}
-        
+
         dept_stats[dept]["total"] += 1
         is_open = c.get("status") not in {"CLOSED", "REJECTED"}
         if is_open:
@@ -927,16 +910,14 @@ def get_analytics():
                 dept_stats[dept]["breached"] += 1
         else:
             dept_stats[dept]["resolved"] += 1
-        
+
         dept_stats[dept]["total_sla_hours"] += (c.get("sla_hours", 24) or 24)
 
-    # Compute SLA compliance percentage
     for dept, s in dept_stats.items():
         total_open = s["open"]
         s["sla_compliance"] = round(100.0 - ((s["breached"] / total_open * 100.0) if total_open > 0 else 0.0), 1)
         s["avg_sla_hours"] = round(s["total_sla_hours"] / max(1, s["total"]), 1)
 
-    # Geographic Hotspot Clustering
     hotspots = []
     jurisdiction_clusters = {}
     for c in open_cases:
@@ -951,7 +932,7 @@ def get_analytics():
                 "max_risk": 0,
                 "critical_count": 0
             }
-        
+
         cl = jurisdiction_clusters[jur]
         cl["count"] += 1
         cat = c.get("category", "roads")
